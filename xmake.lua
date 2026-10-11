@@ -155,13 +155,13 @@ target("Tretro")
     end
 
     -- ── Linker Map File (Analyze & Release) ────────────────────
-    if has_config("analyze") or is_mode("release") then
+        if has_config("analyze") or is_mode("release") then
         if is_plat("macosx") then
-            add_ldflags("-Wl,-map," .. path.join(os.projectdir(), "build", "Tretro.map"), {force = true})
+            add_ldflags("-Wl,-map,build/Tretro.map", {force = true})
         elseif USE_MSVC then
-            add_ldflags("/MAP:" .. path.join(os.projectdir(), "build", "Tretro.map"), {force = true})
+            add_ldflags("/MAP:build/Tretro.map", {force = true})
         else
-            add_ldflags("-Wl,-Map," .. path.join(os.projectdir(), "build", "Tretro.map"), {force = true})
+            add_ldflags("-Wl,-Map,build/Tretro.map", {force = true})
         end
     end
 
@@ -175,7 +175,7 @@ target("Tretro")
                   "       xmake f --engine_dir=/path/to/engine\n", ENGINE)
         end
         if has_config("analyze") then
-            os.mkdir(path.join(os.projectdir(), "build"))
+            os.mkdir("build")
         end
     end)
 
@@ -338,7 +338,7 @@ target("Tretro")
 
             -- Map analysis
             local analyzer = find_tool_script("map_analyzer.py")
-            local mapfile  = path.join(os.projectdir(), "build", "Tretro.map")
+            local mapfile  = path.join("build", "Tretro.map")
             if python and analyzer and os.isfile(mapfile) then
                 print("Analyzing binary size breakdown (" .. analyzer .. ")...")
                 os.execv(python.program, {analyzer, mapfile})
