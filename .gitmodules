@@ -1,0 +1,3 @@
+[submodule "RTerminal"]
+	path = RTerminal
+	url = https://github.com/TheAdrianPOP/RTerminal.git

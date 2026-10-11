@@ -1,0 +1,28 @@
+# xmake build outputs and cache
+.xmake/
+build/
+*.bcache/
+
+# Binary & object files
+*.o
+*.obj
+*.exe
+*.dll
+*.so
+*.dylib
+*.a
+*.lib
+
+# Linker map files
+*.map
+
+# IDE / Editor files
+.vscode/
+.vs/
+*.vcxproj*
+*.sln
+.idea/
+
+# OS files
+Thumbs.db
+.DS_Store
