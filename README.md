@@ -4,6 +4,8 @@ Play any Libretro core directly in a terminal.
 
 Tretro is an ultra-lightweight, high-performance terminal frontend for Libretro emulator cores, powered by a custom terminal engine.
 
+(Project is unfinished)
+
 ## Features
 
 - **Terminal Rendering**: High-speed console rendering with ANSI true-color and glyph optimizations.
