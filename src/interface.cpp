@@ -1127,7 +1127,8 @@ UI_NOINLINE static void executeDownloaderAction(RetroUI& ui, CoreDownloadManager
     if (!inst) {
         downloader_mgr.startDownload(core);
     } else {
-        switch (s_act) {
+        int act = !core.local ? s_act : (s_act == 0 ? 0 : 2);
+        switch (act) {
             case 0: {
                 char path[512];
                 downloader_mgr.getCoreFilePath(core.name, path, sizeof(path));
@@ -1161,16 +1162,24 @@ UI_NOINLINE void RetroUI::renderDownloader(int w, int h, int px, int py, int pw,
         End(); return;
     }
 
-    DrawUIText("Select core:", Colors::LABEL); DrawSeparator();
+    if (downloader_mgr.isCoreListOffline()) {
+        DrawUIText("Offline (local cores only):", Colors::LABEL);
+    } else {
+        DrawUIText("Select core:", Colors::LABEL);
+    }
+    DrawSeparator();
 
     int core_count = downloader_mgr.getCoreCount(), total_items = core_count + 1;
     s_win_top = ctx.cursor_y; int visible = computeVisibleWindow(py, ph, downloader.scroll_offset);
     int cur_idx = menu.selected_index;
-    bool cur_inst = (cur_idx >= 1 && cur_idx - 1 < core_count) && downloader_mgr.isCoreInstalled(downloader_mgr.getCoreInfo(cur_idx - 1).name);
+    CoreInfo cur_sel = (cur_idx >= 1 && cur_idx - 1 < core_count) ? downloader_mgr.getCoreInfo(cur_idx - 1) : CoreInfo{};
+    bool cur_inst = (cur_idx >= 1 && cur_idx - 1 < core_count) && downloader_mgr.isCoreInstalled(cur_sel.name);
+    int cur_acts = !cur_inst ? 1 : (!cur_sel.local ? 3 : 2);
 
     if (!cur_inst) s_dl_act = 0;
-    else if (m_left)  s_dl_act = (s_dl_act + 2) % 3;
-    else if (m_right) s_dl_act = (s_dl_act + 1) % 3;
+    else if (m_left)  s_dl_act = (s_dl_act + cur_acts - 1) % cur_acts;
+    else if (m_right) s_dl_act = (s_dl_act + 1) % cur_acts;
+    if (s_dl_act >= cur_acts) s_dl_act = 0;
 
     for (int i = 0; i < visible && downloader.scroll_offset + i < total_items; ++i) {
         int idx = downloader.scroll_offset + i;
@@ -1199,14 +1208,25 @@ UI_NOINLINE void RetroUI::renderDownloader(int w, int h, int px, int py, int pw,
                 RGBColor bcol = (sel && (btn_hit || m_keyboard_gamepad_active)) ? Colors::TAB_ACTIVE : Colors::BAR_FILL;
                 drawScaledText(bx, row_y, big_mode ? "Download" : "[ Download ]", bcol);
             } else {
+                int b_indices[3];
+                int num_b = 0;
+                if (!cur_core.local) {
+                    b_indices[0] = 0; b_indices[1] = 1; b_indices[2] = 2;
+                    num_b = 3;
+                } else {
+                    b_indices[0] = 0; b_indices[1] = 2;
+                    num_b = 2;
+                }
+
                 int b_xs[3], b_ws[3], xr = end_x, spacing = big_mode ? 2 : 3;
-                for (int d = 2; d >= 0; --d) {
-                    b_ws[d] = big_mode ? kDownloaderBtns[d].big_w : kDownloaderBtns[d].w;
+                for (int d = num_b - 1; d >= 0; --d) {
+                    int bi = b_indices[d];
+                    b_ws[d] = big_mode ? kDownloaderBtns[bi].big_w : kDownloaderBtns[bi].w;
                     xr -= b_ws[d] + spacing; b_xs[d] = xr;
                 }
                 if (sel && !m_keyboard_gamepad_active) {
                     bool btn_hit = false;
-                    for (int d = 0; d < 3; ++d) {
+                    for (int d = 0; d < num_b; ++d) {
                         if (hitTest(b_xs[d], row_y, b_ws[d], getItemHeight())) {
                             if (m_mouse_moved || m_mouse_clicked) s_dl_act = d;
                             btn_hit = true; break;
@@ -1214,9 +1234,10 @@ UI_NOINLINE void RetroUI::renderDownloader(int w, int h, int px, int py, int pw,
                     }
                     if (m_mouse_clicked) m_enter = btn_hit;
                 }
-                for (int d = 0; d < 3; ++d) {
+                for (int d = 0; d < num_b; ++d) {
+                    int bi = b_indices[d];
                     RGBColor bcol = (sel && s_dl_act == d) ? Colors::TAB_ACTIVE : Colors::INACTIVE;
-                    drawScaledText(b_xs[d], row_y, big_mode ? kDownloaderBtns[d].big_lbl : kDownloaderBtns[d].lbl, bcol);
+                    drawScaledText(b_xs[d], row_y, big_mode ? kDownloaderBtns[bi].big_lbl : kDownloaderBtns[bi].lbl, bcol);
                 }
             }
         }

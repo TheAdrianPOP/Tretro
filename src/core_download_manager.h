@@ -28,7 +28,7 @@ enum {
 struct CoreInfo {
     char name[NAME_SZ];
     char desc[DESC_SZ];
-    char sha256[65];
+    bool local;              // found in the cores folder but not listed on the buildbot
 };
 
 class CoreDownloadManager {
@@ -39,6 +39,7 @@ public:
     bool isCoreListLoading()  const { return m_ls.loading.load(); }
     bool isCoreListLoaded()   const { return m_ls.loaded.load();  }
     bool hasCoreListFailed()  const { return m_ls.failed.load();  }
+    bool isCoreListOffline()  const { return m_ls.offline.load(); }   // buildbot unreachable, only local cores listed
     int  getCoreCount()        const { return m_ls.state.load(rt_mo::acquire) >> 1; }
     
     CoreInfo getCoreInfo(int i) const {
@@ -74,7 +75,7 @@ private:
     struct LS {
         CoreInfo  e[2][MAX_CORES];
         AtomicInt state{0};
-        AtomicBool loading{false}, loaded{false}, failed{false};
+        AtomicBool loading{false}, loaded{false}, failed{false}, offline{false};
         Mutex*    start_mtx;
     } m_ls;
 
@@ -84,12 +85,12 @@ private:
         AtomicFloat progress{0.f};
         Mutex*      meta_mtx;
         char name[NAME_SZ]{};
-        char sha256[65]{};
     } m_dl;
 
     static bool nameOk(const char* n);
     void        corePath(const char* n, const char* ext, char* out, size_t sz) const;
     static bool infoName(const char* n, char* out, size_t sz);
+    static int  mergeLocal(CoreInfo* e, int n);
 
     bool httpGet(const char* host, const char* path,
                  char* body, size_t cap, size_t& len);
@@ -103,4 +104,4 @@ private:
     static void sDlThread(void*);
 };
 
-#endif 
+#endif

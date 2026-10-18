@@ -119,23 +119,8 @@ NOINLINE_COLD static bool parseArgs(int argc, char* argv[], ParsedArgs& a) {
                 continue;
             }
         } else if (arg[0] != '-') {
-            resolvePath(arg, path_buf, sizeof(path_buf));
-            makePathAbsolute(path_buf[0] ? path_buf : arg, path_buf, sizeof(path_buf));
-            
-            const char* ext = getFileExtension(path_buf);
-            bool is_core = false;
-            if (ext) {
-                char lext[16];
-                size_t j = 0;
-                while (j < 15 && ext[j]) {
-                    char c = ext[j];
-                    lext[j++] = (c >= 'A' && c <= 'Z') ? (c | 32) : c;
-                }
-                lext[j] = '\0';
-                is_core = isCoreExt(lext);
-            }
-
-            safeCopy(is_core ? a.core_path : a.content_path, path_buf, 512);
+            makePathAbsolute(arg, path_buf, sizeof(path_buf));
+            safeCopy(isCoreExt(getFileExtension(path_buf)) ? a.core_path : a.content_path, path_buf, 512);
         }
     }
     return true;
@@ -259,8 +244,7 @@ NOINLINE_COLD static bool runStartup(int argc, char* argv[], Frontend& f, RetroU
     setWorkDirToExeDir(argv[0]);
 #endif
 
-    const char* c_path   = args.core_path[0]    ? args.core_path    : nullptr;
-    const char* cnt_path = args.content_path[0] ? args.content_path : nullptr;
+    const char* c_path = args.core_path[0] ? args.core_path : nullptr;
 
     setupConsoleMode();
     ui.bindInput(&f.input);
@@ -289,14 +273,6 @@ NOINLINE static void processInputAndShortcuts(Frontend& f, RetroUI& ui, bool sta
 
     if (menu_toggle) {
         ui.open = !ui.open;
-    }
-
-    if (f.input.isKeyPressed(KEY_ESC)) {
-        if (ui.browser.active) {
-            ui.browser.active = false;
-        } else if (ui.core_picker.active || ui.downloader.active) {
-            ui.handleBack();
-        }
     }
 
 #ifdef MEM_ANALYZE

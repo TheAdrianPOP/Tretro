@@ -9,7 +9,7 @@
 #include <shellapi.h>
 #define strcasecmp _stricmp
 #define strncasecmp _strnicmp
-
+#endif
 StdRedirector::StdRedirector() {
     hOrigStdout = GetStdHandle(STD_OUTPUT_HANDLE);
     hOrigStderr = GetStdHandle(STD_ERROR_HANDLE);
@@ -72,7 +72,6 @@ int drainConsoleCharsUTF8(HANDLE hInput, DWORD eventsAvail, char* out_utf8, int 
     }
     return written;
 }
-#endif
 
 void safeCopy(char* dst, const char* src, size_t max_len) {
     if (!dst || max_len == 0) return;
@@ -240,8 +239,9 @@ bool pathExists(const char* path) {
 #endif
 }
 
-bool isCoreExt(const char* lext) {
-    return lext && (!strcmp(lext, "dll") || !strcmp(lext, "so") || !strcmp(lext, "dylib"));
+// Case-insensitive; accepts nullptr (no extension).
+bool isCoreExt(const char* ext) {
+    return ext && (!strcasecmp(ext, "dll") || !strcasecmp(ext, "so") || !strcasecmp(ext, "dylib"));
 }
 
 static void unescapeUrl(char* s) {

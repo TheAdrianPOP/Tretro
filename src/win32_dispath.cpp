@@ -88,25 +88,14 @@ void checkPastedPathWindows(Frontend& f, RetroUI& ui, const char* exe_path) {
     s_last_dispatched_hash = current_hash;
     s_last_dispatched_time = now;
 
-    const char* ext = getFileExtension(found_path);
-    if (ext && *ext) {
-        char lext[16];
-        size_t j = 0;
-        while (j < 15 && ext[j]) {
-            lext[j] = (char)tolower((unsigned char)ext[j]);
-            j++;
-        }
-        lext[j] = '\0';
+    if (isCoreExt(getFileExtension(found_path))) {
+        safeCopy(ui.pending_core, found_path, sizeof(ui.pending_core));
+        ui.pending_content[0] = '\0';
+        ui.pending_load = true;
 
-        if (isCoreExt(lext)) {
-            safeCopy(ui.pending_core, found_path, sizeof(ui.pending_core));
-            ui.pending_content[0] = '\0';
-            ui.pending_load = true;
-
-            const char* fn = getPathFilename(found_path);
-            f.logMessage("[loader] Loading core: %s", fn ? fn : found_path);
-            return;
-        }
+        const char* fn = getPathFilename(found_path);
+        f.logMessage("[loader] Loading core: %s", fn ? fn : found_path);
+        return;
     }
 
     ui.core_picker.candidates.clear();
@@ -149,4 +138,4 @@ void checkPastedPathWindows(Frontend& f, RetroUI& ui, const char* exe_path) {
     ui.open = true;
 }
 
-#endif 
+#endif

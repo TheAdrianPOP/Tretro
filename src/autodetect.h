@@ -1,6 +1,4 @@
 #pragma once
-
-#include <stddef.h>
 #include "vector.h"
 #include "dyn_string.h"
 
@@ -27,5 +25,3 @@ int autodetectCoreMulti(const char* content_path, const char* exe_path,
                          int* out_matched_count,
                          PodVector<DynString>* out_library_names = nullptr,
                          PodVector<int>* out_ext_counts = nullptr);
-
-const char* autodetectCore(const char* content_path, const char* exe_path, char* out_buf, size_t out_sz);
