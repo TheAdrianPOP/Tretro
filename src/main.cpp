@@ -166,7 +166,7 @@ NOINLINE static void handlePendingLoad(
     }
 }
 
-NOINLINE_COLD static void openCorePickerForContent(RetroUI& ui, const char* content_path, const char* argv0 = nullptr) {
+NOINLINE_COLD static void openCorePickerForContent(RetroUI& ui, const char* content_path) {
     if (!content_path || !content_path[0]) return;
 
     ui.core_picker.candidates.clear();
@@ -178,7 +178,7 @@ NOINLINE_COLD static void openCorePickerForContent(RetroUI& ui, const char* cont
 
     int matched = 0;
     ui.core_picker.num_candidates = autodetectCoreMulti(
-        content_path, argv0 ? argv0 : "", ui.core_picker.candidates,
+        content_path, ui.core_picker.candidates,
         &matched, &ui.core_picker.library_names, &ui.core_picker.ext_counts);
 
     ui.core_picker.matched_count = matched;
@@ -198,7 +198,7 @@ NOINLINE_COLD static void openCorePickerForContent(RetroUI& ui, const char* cont
     }
 }
 
-NOINLINE_COLD static bool initFrontendAndCore(Frontend& f, RetroUI& ui, const ParsedArgs& args, const char* core_path, const char* argv0 = nullptr) {
+NOINLINE_COLD static bool initFrontendAndCore(Frontend& f, RetroUI& ui, const ParsedArgs& args, const char* core_path) {
     bool standalone_mode = (core_path == nullptr);
     const char* cnt_path = args.content_path[0] ? args.content_path : nullptr;
 
@@ -225,7 +225,7 @@ NOINLINE_COLD static bool initFrontendAndCore(Frontend& f, RetroUI& ui, const Pa
     if (standalone_mode) {
         ui.standalone = true;
         if (cnt_path) {
-            openCorePickerForContent(ui, cnt_path, argv0);
+            openCorePickerForContent(ui, cnt_path);
         } else {
             ui.open = true;
         }
@@ -249,7 +249,7 @@ NOINLINE_COLD static bool runStartup(int argc, char* argv[], Frontend& f, RetroU
     setupConsoleMode();
     ui.bindInput(&f.input);
 
-    standalone_mode = initFrontendAndCore(f, ui, args, c_path, argv[0]);
+    standalone_mode = initFrontendAndCore(f, ui, args, c_path);
     return true;
 }
 
@@ -364,7 +364,8 @@ NOINLINE static void renderAndStepFrame(
 
             if (d_buf) {
                 const ConsoleCell* prev = pristine_frame.data();
-                for (size_t idx = 0; idx < total_cells; ++idx) {
+                // Only the stats overlay reads changed_cells, so skip the diff otherwise.
+                if (g_cfg.show_stats_overlay) for (size_t idx = 0; idx < total_cells; ++idx) {
                     const ConsoleCell& c_prev = prev[idx];
                     const ConsoleCell& c_curr = d_buf[idx];
                     

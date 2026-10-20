@@ -20,7 +20,7 @@ struct CoreInfoFirmware {
 bool parseFirmwareFromInfo(const char* core_path, CoreInfoFirmware* out);
 bool getCoreMetadataFromInfo(const char* core_path, char* out_display_name, size_t disp_sz, char* out_exts, size_t exts_sz);
 
-int autodetectCoreMulti(const char* content_path, const char* exe_path,
+int autodetectCoreMulti(const char* content_path,
                          PodVector<DynString>& out_paths,
                          int* out_matched_count,
                          PodVector<DynString>* out_library_names = nullptr,

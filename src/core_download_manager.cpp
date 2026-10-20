@@ -2,6 +2,7 @@
 #include "core_download_manager.h"
 #include "path_utils.h"
 #include "file_system.h"
+#include "zip_util.h"
 
 #include <direct.h>
 #include <windows.h>
@@ -64,13 +65,6 @@ static inline bool inet_ready() {
 /* ------------------------------------------------------------------ */
 /* Zip                                                                */
 /* ------------------------------------------------------------------ */
-
-static inline uint32_t u32le(const unsigned char* p) {
-    return (uint32_t)p[0] | ((uint32_t)p[1]<<8) | ((uint32_t)p[2]<<16) | ((uint32_t)p[3]<<24);
-}
-static inline uint16_t u16le(const unsigned char* p) {
-    return (uint16_t)p[0] | ((uint16_t)p[1]<<8);
-}
 
 namespace {
 
@@ -201,19 +195,19 @@ __attribute__((noinline)) bool inflateRaw(const uint8_t* in, size_t n, uint8_t* 
 // If expect is set, the zip must contain exactly one entry named "<expect>.dll".
 bool unzipBuf(const uint8_t* z, size_t sz, const char* dest, const char* expect) {
     size_t p = sz - 22, lo = sz > 65557 ? sz - 65557 : 0;
-    for (; u32le(z + p) != 0x06054b50u; --p) if (p == lo) return false;
+    for (; le32(z + p) != 0x06054b50u; --p) if (p == lo) return false;
 
-    uint32_t count = u16le(z + p + 10);
-    size_t pos = u32le(z + p + 16);
+    uint32_t count = le16(z + p + 10);
+    size_t pos = le32(z + p + 16);
     if (expect && count != 1) return false;
     int done = 0;
 
     for (uint32_t i = 0; i < count; i++) {
-        if (pos + 46 > sz || u32le(z + pos) != 0x02014b50u) return false;
-        uint16_t method = u16le(z + pos + 10);
-        uint32_t csize = u32le(z + pos + 20), usize = u32le(z + pos + 24);
-        uint16_t fnl = u16le(z + pos + 28), exl = u16le(z + pos + 30), cml = u16le(z + pos + 32);
-        size_t loff = u32le(z + pos + 42);
+        if (pos + 46 > sz || le32(z + pos) != 0x02014b50u) return false;
+        uint16_t method = le16(z + pos + 10);
+        uint32_t csize = le32(z + pos + 20), usize = le32(z + pos + 24);
+        uint16_t fnl = le16(z + pos + 28), exl = le16(z + pos + 30), cml = le16(z + pos + 32);
+        size_t loff = le32(z + pos + 42);
         if (pos + 46 + fnl > sz) return false;
 
         char name[260];
@@ -233,8 +227,8 @@ bool unzipBuf(const uint8_t* z, size_t sz, const char* dest, const char* expect)
         for (const char* c = name; *c; ++c) if (*c == '/' || *c == '\\') base = c + 1;
         if (!*base || strstr(base, "..") || strchr(base, ':')) return false;
 
-        if (loff + 30 > sz || u32le(z + loff) != 0x04034b50u) return false;
-        size_t ds = loff + 30 + u16le(z + loff + 26) + u16le(z + loff + 28);
+        if (loff + 30 > sz || le32(z + loff) != 0x04034b50u) return false;
+        size_t ds = loff + 30 + le16(z + loff + 26) + le16(z + loff + 28);
         if (ds + csize > sz) return false;
 
         uint8_t* out = (uint8_t*)malloc(usize ? usize : 1);
@@ -335,17 +329,8 @@ CoreDownloadManager::~CoreDownloadManager() {
     delete m_dl.meta_mtx;
 }
 
-bool CoreDownloadManager::cancelPending() const {
-    return m_dl.cancelled.load();
-}
-
 void CoreDownloadManager::resetDownloadStatus() {
-    if (m_dl.active.load()) return;
-
-    m_dl.completed.store(false);
-    m_dl.failed.store(false);
-    m_dl.cancelled.store(false);
-    m_dl.progress.store(0.f);
+    if (!m_dl.active.load()) m_dl.progress.store(0.f);
 }
 
 bool CoreDownloadManager::isCoreInstalled(const char* n) const {
@@ -450,15 +435,13 @@ bool CoreDownloadManager::httpGet(const char* host, const char* path,
     AutoInet hUrl(open_url(hSession, host, path));
     if (!hUrl) return false;
 
-    bool ok = true;
     DWORD got = 0;
     while (len + 1 < cap) {
-        if (cancelPending()) { ok = false; break; }
         if (!g_inet.InternetReadFile(hUrl, body + len, (DWORD)(cap - 1 - len), &got) || got == 0) break;
         len += got;
     }
     body[len] = 0;
-    return ok && len > 0;
+    return len > 0;
 }
 
 bool CoreDownloadManager::httpDl(const char* host, const char* path,
@@ -491,8 +474,6 @@ bool CoreDownloadManager::httpDl(const char* host, const char* path,
     bool ok = true;
 
     while (true) {
-        if (cancelPending()) { ok = false; break; }
-
         DWORD got = 0;
         if (!g_inet.InternetReadFile(hUrl, buf, HTTP_BUFSZ, &got)) { ok = false; break; }
         if (got == 0) break;
@@ -664,14 +645,10 @@ void CoreDownloadManager::startDownload(const CoreInfo& c) {
     if (m_dl.active.exchange(true)) return;
 
     if (!nameOk(c.name)) {
-        m_dl.failed.store(true);
         m_dl.active.store(false);
         return;
     }
     m_dl.progress.store(0.f);
-    m_dl.completed.store(false);
-    m_dl.failed.store(false);
-    m_dl.cancelled.store(false);
     {
         LockGuard lg(*m_dl.meta_mtx);
         safeCopy(m_dl.name, c.name, NAME_SZ);
@@ -700,23 +677,11 @@ void CoreDownloadManager::dlThread() {
     for (int attempt = 0; attempt < 3 && !ok; ++attempt) {
         m_dl.progress.store(0.f);
         ok = httpDl(HOST, url, zip, true);
-        if (m_dl.cancelled.load()) break;
     }
-
-    bool cancelled = m_dl.cancelled.load();
-    if (ok && !cancelled) {
-        char core_path[PATH_SZ];
-        corePath(local_name, EXT_SO, core_path, sizeof(core_path));
-        ok = unzip(zip, g_cores_dir, local_name) && FS::exists(core_path);
-    } else {
-        ok = false;
-    }
-
+    if (ok) unzip(zip, g_cores_dir, local_name);
     remove(zip);
 
     m_dl.progress.store(100.f);
-    m_dl.completed.store(ok);
-    m_dl.failed.store(!ok && !cancelled);
     m_dl.active.store(false);
 }
 

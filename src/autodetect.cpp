@@ -2,6 +2,7 @@
 #include "autodetect.h"
 #include "path_utils.h"
 #include "file_system.h"
+#include "zip_util.h"
 
 #define strcasecmp  _stricmp
 #define strncasecmp _strnicmp
@@ -183,11 +184,6 @@ static int extPrio(const char* e) {
     return 3;
 }
 
-static inline unsigned le16(const unsigned char* p) { return p[0] | (p[1] << 8); }
-static inline unsigned long le32(const unsigned char* p) {
-    return p[0] | (p[1] << 8) | (p[2] << 16) | ((unsigned long)p[3] << 24);
-}
-
 static bool getZipInnerExtension(const char* zip_path, char* out_ext, size_t out_ext_sz) {
     out_ext[0] = '\0';
     FILE* f = fopen(zip_path, "rb");
@@ -211,7 +207,8 @@ static bool getZipInnerExtension(const char* zip_path, char* out_ext, size_t out
                 unsigned char hdr[46];
                 if (fread(hdr, 1, 46, f) != 46 || le32(hdr) != 0x02014b50UL) break;
 
-                unsigned fn_len = le16(hdr + 28), skip = le16(hdr + 30) + le16(hdr + 32);
+                unsigned fn_len  = le16(hdr + 28);
+                unsigned skip    = le16(hdr + 30) + le16(hdr + 32);
                 if (fn_len > 0 && fn_len < sizeof(fn)) {
                     if (fread(fn, 1, fn_len, f) != fn_len) break;
                     fn[fn_len] = '\0';
@@ -248,7 +245,7 @@ static bool ranksBefore(const Candidate& b, const Candidate& a) {
     return (b.score != a.score) ? b.score > a.score : b.exts < a.exts;
 }
 
-int autodetectCoreMulti(const char* content_path, const char* ,
+int autodetectCoreMulti(const char* content_path,
                          PodVector<DynString>& out_paths,
                          int* out_matched_count,
                          PodVector<DynString>* out_library_names,

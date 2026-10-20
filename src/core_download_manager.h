@@ -6,15 +6,8 @@
 
 struct Mutex;
 
-#ifdef _WIN32
-#  include "wininet.h"    
-#  define PATH_SEP   '\\'
-#  define PATH_SEPS  "\\"
-#else
-#  include <unistd.h>
-#  define PATH_SEP   '/'
-#  define PATH_SEPS  "/"
-#endif
+#include "wininet.h"
+#define PATH_SEP '\\'
 
 enum {
     MAX_CORES    = 512,
@@ -58,7 +51,6 @@ public:
 
     void  startDownload(const CoreInfo& c);
     bool  isDownloadActive()    const { return m_dl.active.load();    }
-    bool  hasDownloadFailed()   const { return m_dl.failed.load();    }
     float getDownloadProgress() const { return m_dl.progress.load();  }
     void  resetDownloadStatus();
     const char* getActiveCoreName() const;
@@ -80,8 +72,7 @@ private:
     } m_ls;
 
     struct DS {
-        AtomicBool  active{false}, completed{false},
-                    failed{false}, cancelled{false};
+        AtomicBool  active{false};
         AtomicFloat progress{0.f};
         Mutex*      meta_mtx;
         char name[NAME_SZ]{};
@@ -95,7 +86,6 @@ private:
     bool httpGet(const char* host, const char* path,
                  char* body, size_t cap, size_t& len);
     bool httpDl (const char* host, const char* path, const char* dest, bool update_progress = false);
-    bool cancelPending() const;
     bool download_and_extract_info();
     void listThread();
     void dlThread();

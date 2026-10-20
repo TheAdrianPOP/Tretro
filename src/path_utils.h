@@ -26,8 +26,6 @@ template <size_t N>
 inline void safeCopy(char (&dst)[N], const char* src) {
     safeCopy(dst, src, N);
 }
-bool resolveShortcut(const char* shortcut_path, char* target_path, size_t target_sz);
-void resolvePath(const char* input_path, char* output_buf, size_t output_sz);
 const char* stripPathC(const char* str, char* out_buf, size_t out_sz);
 const char* getPathFilename(const char* path);
 const char* getFileExtension(const char* path);

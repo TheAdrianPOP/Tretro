@@ -15,20 +15,6 @@ template<typename T> static inline T rt_clamp(T val, T lo, T hi) { return (val <
 template<typename T> static inline void rt_swap(T& a, T& b) { T tmp = a; a = b; b = tmp; }
 static inline float rt_fmod(float val, float mod) { return (mod > 0.0f) ? (val - (int)(val / mod) * mod) : 0.0f; }
 
-static inline const char* getFilename(const char* path) {
-    if (!path) return "";
-    const char* fn = strrchr(path, '/');
-    if (!fn) fn = strrchr(path, '\\');
-    return fn ? fn + 1 : path;
-}
-
-UI_NOINLINE static void copyStr(char* dst, size_t sz, const char* src) {
-    if (!sz) return;
-    size_t i = 0;
-    for (; i + 1 < sz && src[i]; ++i) dst[i] = src[i];
-    dst[i] = '\0';
-}
-
 struct StrToken { const char* p; int len; };
 static int splitPipes(const char* s, StrToken* tokens, int max_tokens) {
     int count = 0;
@@ -479,7 +465,7 @@ static void getCoreOptionDisplay(const CoreVar& cv, char* out_lbl, size_t lbl_sz
 
     char* paren = strrchr(clean_lbl, '(');
     if (paren && paren > clean_lbl) {
-        char temp[32]; copyStr(temp, sizeof(temp), paren);
+        char temp[32]; safeCopy(temp, paren, sizeof(temp));
         for (char* t = temp; *t; ++t) if (*t >= 'A' && *t <= 'Z') *t = (char)(*t + 32);
         if (strstr(temp, "restart")) {
             while (paren > clean_lbl && *(paren - 1) == ' ') paren--;
@@ -529,10 +515,10 @@ static void getCoreOptionDisplay(const CoreVar& cv, char* out_lbl, size_t lbl_sz
             { "auto", "Auto" }, { "default", "Default" }
         };
         for (const auto& n : kNorms) {
-            if (!strcmp(cur, n.match)) { copyStr(out_val, val_sz, n.rep); found_label = true; break; }
+            if (!strcmp(cur, n.match)) { safeCopy(out_val, n.rep, val_sz); found_label = true; break; }
         }
         if (!found_label) {
-            copyStr(out_val, val_sz, cur);
+            safeCopy(out_val, cur, val_sz);
             if (out_val[0] >= 'a' && out_val[0] <= 'z') out_val[0] = (char)(out_val[0] - 'a' + 'A');
         }
     }
@@ -564,11 +550,11 @@ void RetroUI::browserScan() {
 void RetroUI::tryPickCoreForContent(const char* content_path) {
     core_picker.candidates.clear(); core_picker.library_names.clear(); core_picker.ext_counts.clear();
     core_picker.no_match = false;
-    copyStr(core_picker.content_path, sizeof(core_picker.content_path), content_path);
+    safeCopy(core_picker.content_path, content_path, sizeof(core_picker.content_path));
 
     int matched = 0;
     core_picker.num_candidates = autodetectCoreMulti(
-        content_path, "", core_picker.candidates, &matched, &core_picker.library_names, &core_picker.ext_counts);
+        content_path, core_picker.candidates, &matched, &core_picker.library_names, &core_picker.ext_counts);
     core_picker.matched_count = matched;
     browser.active = pending_load = false;
 
@@ -851,7 +837,7 @@ UI_NOINLINE void RetroUI::renderInGameBottomBar(int w, int h, float ease_slide, 
     if (bot_y >= h) return;
     bot_y = rt_max(0, bot_y);
 
-    fillBarRow(bot_y, bot_h, w, h, mono, mono ? Colors::MENU_BG : Colors::STATUS_BG, true);
+    fillBarRow(bot_y, bot_h, w, h, mono, mono ? Colors::MENU_BG : Colors::STATUS_BG);
 
     bool has_game = !standalone && Frontend::get().core.loaded();
     int char_w = big_mode ? 4 : 1;
@@ -896,7 +882,7 @@ void RetroUI::renderBottomBar(int w, int h, float anim, bool mono) {
     if (bot_y >= h) return;
     bot_y = rt_max(0, bot_y);
 
-    fillBarRow(bot_y, bot_h, w, h, mono, mono ? Colors::MENU_BG : Colors::STATUS_BG, true);
+    fillBarRow(bot_y, bot_h, w, h, mono, mono ? Colors::MENU_BG : Colors::STATUS_BG);
 
     int tip_idx = TIP_DEFAULT;
     if (browser.active)                             tip_idx = TIP_BROWSER;
@@ -910,7 +896,7 @@ void RetroUI::renderBottomBar(int w, int h, float anim, bool mono) {
     drawScaledText(tx, bot_y, status, Colors::TEXT_DEF, {-1, -1, -1}, w);
 }
 
-void RetroUI::fillBarRow(int y_start, int bar_h, int w, int h, bool mono, RGBColor bar_bg, bool mono_resets_bg) {
+void RetroUI::fillBarRow(int y_start, int bar_h, int w, int h, bool mono, RGBColor bar_bg) {
     auto& buffer = *ctx.buffer;
     for (int y = 0; y < bar_h; ++y) {
         int draw_y = y_start + y;
@@ -924,7 +910,7 @@ void RetroUI::fillBarRow(int y_start, int bar_h, int w, int h, bool mono, RGBCol
             } else {
                 cell.character = ConsoleGlyph(shadow_ramp[2]);
                 cell.color = mono ? Colors::STATUS_KEY : bar_bg;
-                if (!mono || mono_resets_bg) cell.bg_color = {0,0,0};
+                cell.bg_color = {0,0,0};
                 cell.is_ui = true; cell.is_border = false;
             }
         }
@@ -933,7 +919,7 @@ void RetroUI::fillBarRow(int y_start, int bar_h, int w, int h, bool mono, RGBCol
 
 void RetroUI::renderTopBar(int w, int h, float anim, bool mono) {
     auto& buffer = *ctx.buffer; int top_h = big_mode ? 7 : 1, top_y = (int)((anim - 1.f) * top_h);
-    fillBarRow(top_y, top_h, w, h, mono, mono ? Colors::MENU_BG : Colors::STATUS_BG, true);
+    fillBarRow(top_y, top_h, w, h, mono, mono ? Colors::MENU_BG : Colors::STATUS_BG);
 
     const char* const* tabs_ptrs = (big_mode && w < 192) ? tab_names_short : tab_names;
     int total_w = 0;
@@ -1037,13 +1023,13 @@ UI_NOINLINE void RetroUI::renderBrowser(int w, int h, int px, int py, int pw, in
                 else       snprintf(browser.current_dir, sizeof(browser.current_dir), ".");
                 browserScan();
             } else if (is_dir) {
-                char temp[256]; copyStr(temp, sizeof(temp), name);
+                char temp[256]; safeCopy(temp, name, sizeof(temp));
                 temp[strlen(temp)-1] = '\0';
-                copyStr(browser.current_dir, sizeof(browser.current_dir), FS::join(browser.current_dir, temp).c_str());
+                safeCopy(browser.current_dir, FS::join(browser.current_dir, temp).c_str(), sizeof(browser.current_dir));
                 browserScan();
             } else {
                 char full_path[512];
-                copyStr(full_path, sizeof(full_path), FS::join(browser.current_dir, name).c_str());
+                safeCopy(full_path, FS::join(browser.current_dir, name).c_str(), sizeof(full_path));
                 if (browser.append_disc_mode) {
                     browser.active = browser.append_disc_mode = false;
                     Frontend& fe = Frontend::get();
@@ -1063,7 +1049,7 @@ UI_NOINLINE void RetroUI::renderBrowser(int w, int h, int px, int py, int pw, in
 UI_NOINLINE void RetroUI::renderCorePicker(int w, int h, int px, int py, int pw, int ph, bool mono) {
     Begin("", px, py, pw, ph, Colors::BORDER, Colors::BG);
     char title[256];
-    snprintf(title, sizeof(title), "CHOOSE CORE FOR: %s", getFilename(core_picker.content_path));
+    snprintf(title, sizeof(title), "CHOOSE CORE FOR: %s", getPathFilename(core_picker.content_path));
     drawSectionTitle(title);
 
     static const char* const picker_hints[] = { "Multiple cores matched:", "Matched cores first:", "No match - select core:" };
@@ -1082,7 +1068,7 @@ UI_NOINLINE void RetroUI::renderCorePicker(int w, int h, int px, int py, int pw,
 
         bool unmatched = (!core_picker.no_match && idx >= core_picker.matched_count);
         char display[160], core_name[128];
-        CoreDownloadManager::stripCoreExtension(getFilename(path), core_name, sizeof(core_name));
+        CoreDownloadManager::stripCoreExtension(getPathFilename(path), core_name, sizeof(core_name));
 
         const char* prefix = unmatched ? "  [Unmatched] " : "  ";
         if (lib && lib[0]) {
@@ -1104,8 +1090,8 @@ UI_NOINLINE void RetroUI::renderCorePicker(int w, int h, int px, int py, int pw,
 
         if (sel && m_enter) {
             m_enter = false;
-            copyStr(pending_core, sizeof(pending_core), path);
-            copyStr(pending_content, sizeof(pending_content), core_picker.content_path);
+            safeCopy(pending_core, path, sizeof(pending_core));
+            safeCopy(pending_content, core_picker.content_path, sizeof(pending_content));
             pending_load = true; core_picker.active = false; open = false;
         }
     }
@@ -1132,7 +1118,7 @@ UI_NOINLINE static void executeDownloaderAction(RetroUI& ui, CoreDownloadManager
             case 0: {
                 char path[512];
                 downloader_mgr.getCoreFilePath(core.name, path, sizeof(path));
-                copyStr(ui.pending_core, sizeof(ui.pending_core), path);
+                safeCopy(ui.pending_core, path, sizeof(ui.pending_core));
                 ui.pending_load = true; ui.open = false;
                 break;
             }
@@ -1291,8 +1277,8 @@ UI_NOINLINE void RetroUI::renderFileSection(int px, int py, int pw, int ph) {
     for (const auto& r : recents) {
         DrawSeparator(); DrawUIText(r.title, Colors::LABEL);
         for (int i = 0; i < r.count; ++i) {
-            if (MenuOption(getFilename(r.arr[i]), "") && m_enter) {
-                if (r.is_core) { copyStr(pending_core, sizeof(pending_core), r.arr[i]); pending_load = true; }
+            if (MenuOption(getPathFilename(r.arr[i]), "") && m_enter) {
+                if (r.is_core) { safeCopy(pending_core, r.arr[i], sizeof(pending_core)); pending_load = true; }
                 else           { tryPickCoreForContent(r.arr[i]); }
             }
         }
@@ -1393,8 +1379,8 @@ UI_NOINLINE void RetroUI::renderOptionsSection(int px, int py, int pw, int ph) {
             } else if (opt.post_action == PostOptAction::UpdateRenderer) {
                 Frontend& fe = Frontend::get();
                 if (!standalone && fe.core.loaded()) {
-                    copyStr(pending_core, sizeof(pending_core), fe.core_path.c_str());
-                    copyStr(pending_content, sizeof(pending_content), fe.content_path.c_str());
+                    safeCopy(pending_core, fe.core_path.c_str(), sizeof(pending_core));
+                    safeCopy(pending_content, fe.content_path.c_str(), sizeof(pending_content));
                     pending_load = true; open = false;
                 }
             }
@@ -1575,11 +1561,11 @@ UI_NOINLINE void RetroUI::renderGameSection(int px, int py, int pw, int ph) {
             DrawUIText("  No saved games found.", Colors::INACTIVE);
         } else {
             for (const auto& ds : saves) {
-                char title[128]; snprintf(title, sizeof(title), "  %s", ds.display_name[0] ? ds.display_name : getFilename(ds.path));
+                char title[128]; snprintf(title, sizeof(title), "  %s", ds.display_name[0] ? ds.display_name : getPathFilename(ds.path));
                 if (MenuOption(title, ds.time_buf) && m_enter) {
                     m_enter = false;
                     if (getMetaPaths(ds.path, pending_core, sizeof(pending_core), pending_content, sizeof(pending_content))) {
-                        copyStr(pending_state_to_load, sizeof(pending_state_to_load), ds.path);
+                        safeCopy(pending_state_to_load, ds.path, sizeof(pending_state_to_load));
                         pending_load = true; open = false;
                         f.logMessage("[inf] Quick launching %s...", ds.display_name);
                     }

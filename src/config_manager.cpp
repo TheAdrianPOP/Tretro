@@ -1,8 +1,7 @@
 #include "config_manager.h"
 #include "path_utils.h"
 
-static constexpr const char* CFG_FILE        = "./config.bin";
-static constexpr const char* LEGACY_BIN_FILE = "./trarch.bin";
+static constexpr const char* CFG_FILE = "./config.bin";
 
 static AppSettings* s_cfg = nullptr;
 
@@ -48,12 +47,11 @@ void cfgSave() {
 
 void cfgLoad() {
     FILE* f = fopen(CFG_FILE, "rb");
-    if (!f) f = fopen(LEGACY_BIN_FILE, "rb");
 
     if (f) {
         CfgHeader hdr;
         if (fread(&hdr, sizeof(hdr), 1, f) == 1 &&
-            (hdr.magic == CFG_MAGIC || hdr.magic == 0x54524143u) &&
+            hdr.magic == CFG_MAGIC &&
             hdr.version == CFG_VERSION) {
             AppSettings& cfg = get_cfg();
             if (fread(&cfg, sizeof(AppSettings), 1, f) == 1) {
@@ -172,7 +170,7 @@ void gameCfgLoad(const char* save_dir, const char* content_path, const char* cor
     if (!f) return;
 
     GameCfgHeader hdr;
-    if (fread(&hdr, sizeof(hdr), 1, f) == 1 && (hdr.magic == CFG_MAGIC || hdr.magic == 0x54524143u)) {
+    if (fread(&hdr, sizeof(hdr), 1, f) == 1 && hdr.magic == CFG_MAGIC) {
         memcpy(c.key_mappings, hdr.key_mappings, sizeof(c.key_mappings));
         memcpy(c.gamepad_mappings, hdr.gamepad_mappings, sizeof(c.gamepad_mappings));
         c.mouse_sensitivity = hdr.mouse_sensitivity;

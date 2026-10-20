@@ -10,9 +10,6 @@
 #include <sys/types.h>
 #endif
 
-extern void gameCfgLoad(const char* save_dir, const char* content_path, const char* core_path);
-extern void gameCfgSave(const char* save_dir, const char* content_path, const char* core_path);
-
 
 void DiskControl::reset() {
     *this = DiskControl{};
@@ -21,8 +18,7 @@ void DiskControl::reset() {
 void DiskControl::setCallbacks(const void* cb, bool ext) {
     if (!cb) return;
     reset();
-    supported     = true;
-    ext_interface = ext;
+    supported = true;
 
     const auto* base = (const retro_disk_control_callback*)cb;
     set_eject_state     = base->set_eject_state;
@@ -35,9 +31,8 @@ void DiskControl::setCallbacks(const void* cb, bool ext) {
 
     if (ext) {
         const auto* ext_cb = (const retro_disk_control_ext_callback*)cb;
-        set_initial_image = ext_cb->set_initial_image;
-        get_image_path    = ext_cb->get_image_path;
-        get_image_label   = ext_cb->get_image_label;
+        get_image_path  = ext_cb->get_image_path;
+        get_image_label = ext_cb->get_image_label;
     }
 }
 
@@ -146,7 +141,6 @@ Frontend& Frontend::get() {
 Frontend::Frontend()
     : threads(0)
     , audio_ring(16384)
-    , audio_buffered(0)
 {
     system_dir = "./system";
     save_dir   = "./saves";
@@ -522,13 +516,6 @@ bool environment_cb(unsigned cmd, void* data) {
         *(int*)data = 3;
         return true;
 
-    case RETRO_ENVIRONMENT_SET_PERFORMANCE_LEVEL:
-    case RETRO_ENVIRONMENT_SET_ROTATION:
-    case RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS:
-    case RETRO_ENVIRONMENT_SET_AUDIO_CALLBACK:
-    case RETRO_ENVIRONMENT_SET_FRAME_TIME_CALLBACK:
-        return false;
-
     case RETRO_ENVIRONMENT_SET_SUBSYSTEM_INFO:
     case RETRO_ENVIRONMENT_SET_CONTROLLER_INFO:
     case RETRO_ENVIRONMENT_SET_PROC_ADDRESS_CALLBACK:
@@ -785,6 +772,15 @@ bool Frontend::loadState(const char* path) {
     return true;
 }
 
+// "<name>.srm" -> "<name>.rtc"
+static void rtcPath(const char* srm, char* out, size_t sz) {
+    safeCopy(out, srm, sz);
+    const char* base = getPathFilename(out);
+    char* dot = strrchr(out + (base - out), '.');
+    size_t pos = dot ? (size_t)(dot - out) : strlen(out);
+    snprintf(out + pos, sz - pos, ".rtc");
+}
+
 bool Frontend::saveSRAM(const char* custom_path) {
     if (!core.loaded() || !core.get_memory_data || !core.get_memory_size) return false;
 
@@ -817,14 +813,7 @@ bool Frontend::saveSRAM(const char* custom_path) {
 
     if (rtc_data && rtc_size > 0) {
         char rtc_path[512];
-        snprintf(rtc_path, sizeof(rtc_path), "%s", path);
-        char* dot = strrchr(rtc_path, '.');
-        if (dot) {
-            snprintf(dot, sizeof(rtc_path) - (size_t)(dot - rtc_path), ".rtc");
-        } else {
-            size_t cur_len = strlen(rtc_path);
-            snprintf(rtc_path + cur_len, sizeof(rtc_path) - cur_len, ".rtc");
-        }
+        rtcPath(path, rtc_path, sizeof(rtc_path));
 
         if (FS::writeBytes(rtc_path, (const uint8_t*)rtc_data, rtc_size)) {
             logMessage("[inf] [sram] Saved %zu B RTC -> %s", rtc_size, rtc_path);
@@ -891,14 +880,7 @@ bool Frontend::loadSRAM(const char* custom_path) {
 
     if (rtc_data && rtc_size > 0) {
         char rtc_path[512];
-        snprintf(rtc_path, sizeof(rtc_path), "%s", path);
-        char* dot = strrchr(rtc_path, '.');
-        if (dot) {
-            snprintf(dot, sizeof(rtc_path) - (size_t)(dot - rtc_path), ".rtc");
-        } else {
-            size_t cur_len = strlen(rtc_path);
-            snprintf(rtc_path + cur_len, sizeof(rtc_path) - cur_len, ".rtc");
-        }
+        rtcPath(path, rtc_path, sizeof(rtc_path));
 
         if (fileExists(rtc_path)) {
             auto rtc_buf = FS::readBytes(rtc_path);

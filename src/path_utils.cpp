@@ -97,7 +97,7 @@ void getPathStem(const char* path, char* out_buf, size_t out_sz) {
 }
 
 static inline bool testPath(const char* cand, char* out_path, size_t out_sz) {
-    resolvePath(cand, out_path, out_sz);
+    safeCopy(out_path, cand, out_sz);
     if (fileExists(out_path)) return true;
     out_path[0] = '\0';
     return false;
@@ -114,19 +114,6 @@ static char* trimStr(char* str) {
         str[--len] = '\0';
     }
     return str;
-}
-
-
-bool resolveShortcut(const char* , char* , size_t ) {
-    return false;
-}
-
-void resolvePath(const char* input_path, char* output_buf, size_t output_sz) {
-    if (!input_path || output_sz == 0) {
-        if (output_sz > 0) output_buf[0] = '\0';
-        return;
-    }
-    safeCopy(output_buf, input_path, output_sz);
 }
 
 const char* stripPathC(const char* str, char* out_buf, size_t out_sz) {

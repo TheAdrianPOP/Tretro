@@ -92,7 +92,6 @@ struct AppSettings {
     char recent_content [MAX_RECENT][512];
     int  num_recent_cores   = 0;
     int  num_recent_content = 0;
-    int  menu_scroll_offset = 0;
 };
 
 extern AppSettings& get_cfg();
@@ -290,7 +289,7 @@ private:
     void handleNavigation();
     void calculatePopupGeometry(int w, int h, float anim, int& px, int& py, int& pw, int& ph);
     void renderBackground(int w, int h, bool is_mono);
-    void fillBarRow(int y_start, int bar_h, int w, int h, bool is_mono, RGBColor bar_bg, bool mono_resets_bg);
+    void fillBarRow(int y_start, int bar_h, int w, int h, bool is_mono, RGBColor bar_bg);
     void renderTopBar(int w, int h, float anim, bool is_mono);
     void renderBottomBar(int w, int h, float anim, bool is_mono);
 
@@ -324,4 +323,4 @@ private:
     bool m_binding_wait_release = false;
 };
 
-#endif 
+#endif

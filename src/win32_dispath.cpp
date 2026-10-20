@@ -103,7 +103,7 @@ void checkPastedPathWindows(Frontend& f, RetroUI& ui, const char* exe_path) {
     ui.core_picker.ext_counts.clear();
 
     int matched = 0;
-    int num = autodetectCoreMulti(found_path, exe_path, 
+    int num = autodetectCoreMulti(found_path,
                                   ui.core_picker.candidates, 
                                   &matched, 
                                   &ui.core_picker.library_names, 
