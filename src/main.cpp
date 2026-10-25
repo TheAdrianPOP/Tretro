@@ -166,38 +166,6 @@ NOINLINE static void handlePendingLoad(
     }
 }
 
-NOINLINE_COLD static void openCorePickerForContent(RetroUI& ui, const char* content_path) {
-    if (!content_path || !content_path[0]) return;
-
-    ui.core_picker.candidates.clear();
-    ui.core_picker.library_names.clear();
-    ui.core_picker.ext_counts.clear();
-
-    ui.core_picker.no_match = false;
-    safeCopy(ui.core_picker.content_path, content_path, sizeof(ui.core_picker.content_path));
-
-    int matched = 0;
-    ui.core_picker.num_candidates = autodetectCoreMulti(
-        content_path, ui.core_picker.candidates,
-        &matched, &ui.core_picker.library_names, &ui.core_picker.ext_counts);
-
-    ui.core_picker.matched_count = matched;
-    ui.core_picker.no_match = (matched == 0);
-    ui.core_picker.scroll_offset = 0;
-    ui.menu.selected_index = 0;
-    ui.browser.active = false;
-    ui.pending_load = false;
-
-    if (ui.core_picker.num_candidates > 0) {
-        ui.core_picker.active = true;
-        ui.open = true;
-        Frontend::get().logMessage("[loader] Showing core picker for: %s", content_path);
-    } else {
-        Frontend::get().logMessage("[ERR] No cores found for: %s", content_path);
-        ui.open = true;
-    }
-}
-
 NOINLINE_COLD static bool initFrontendAndCore(Frontend& f, RetroUI& ui, const ParsedArgs& args, const char* core_path) {
     bool standalone_mode = (core_path == nullptr);
     const char* cnt_path = args.content_path[0] ? args.content_path : nullptr;
@@ -225,7 +193,7 @@ NOINLINE_COLD static bool initFrontendAndCore(Frontend& f, RetroUI& ui, const Pa
     if (standalone_mode) {
         ui.standalone = true;
         if (cnt_path) {
-            openCorePickerForContent(ui, cnt_path);
+            ui.tryPickCoreForContent(cnt_path, RetroUI::PickMode::Startup);
         } else {
             ui.open = true;
         }
@@ -315,8 +283,8 @@ static void syncConsoleBuffers(Frontend& f,
                                PodVector<PodVector<ConsoleCell>>& standalone_buffer,
                                int& width, int& height) {
     getConsoleSize(width, height);
-    width = fast_max(40, width);
-    height = fast_max(15, height);
+    width = fast_max_t(40, width);
+    height = fast_max_t(15, height);
 
     if (width == f.term_w && height == f.term_h) return;
     f.term_w = width;

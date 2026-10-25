@@ -51,7 +51,8 @@ public:
 
     void  startDownload(const CoreInfo& c);
     bool  isDownloadActive()    const { return m_dl.active.load();    }
-    float getDownloadProgress() const { return m_dl.progress.load();  }
+    int   getDownloadedBytes()  const { return m_dl.rx.load();        }
+    int   getDownloadTotal()    const { return m_dl.total.load();     }   // 0 = size unknown
     void  resetDownloadStatus();
     const char* getActiveCoreName() const;
 
@@ -73,7 +74,8 @@ private:
 
     struct DS {
         AtomicBool  active{false};
-        AtomicFloat progress{0.f};
+        AtomicInt   rx{0};            // bytes received so far
+        AtomicInt   total{0};         // Content-Length, 0 if the server did not say
         Mutex*      meta_mtx;
         char name[NAME_SZ]{};
     } m_dl;

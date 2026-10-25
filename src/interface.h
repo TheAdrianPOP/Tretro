@@ -16,6 +16,9 @@
 #define UI_NOINLINE
 #endif
 
+// Shade glyphs, lightest to darkest (mono dimming, bars, game video).
+inline constexpr const char* const kShadowRamp[5] = { " ", "░", "▒", "▓", "█" };
+
 inline constexpr int MAX_RECENT = 8;
 
 constexpr int BIND_COUNT = 24;
@@ -70,18 +73,8 @@ struct AppSettings {
     static const int default_key_mappings[BIND_COUNT];
     static const int default_gamepad_mappings[BIND_COUNT];
 
-    int key_mappings[BIND_COUNT] = {
-        'Z', KEY_SPACE, KEY_ENTER, KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT,
-        'X', 'S', 'A', 'Q', 'W', -1, -1, -1, -1,
-        'W', 'S', 'A', 'D',
-        'I', 'K', 'J', 'L'
-    };
-
-    int gamepad_mappings[BIND_COUNT] = {
-        0, 9, 8, 12, 13, 14, 15, 1, 3, 2, 4, 5, 6, 7, 10, 11,
-        16, 17, 18, 19,
-        20, 21, 22, 23
-    };
+    int key_mappings[BIND_COUNT];       // filled from default_* by the constructor
+    int gamepad_mappings[BIND_COUNT];
 
     int       mouse_sensitivity         = 180;
     int       default_mouse_sensitivity = 180;
@@ -92,6 +85,9 @@ struct AppSettings {
     char recent_content [MAX_RECENT][512];
     int  num_recent_cores   = 0;
     int  num_recent_content = 0;
+
+    AppSettings();
+    void resetBindings();   // key + gamepad maps back to defaults
 };
 
 extern AppSettings& get_cfg();
@@ -101,13 +97,34 @@ void cfgSave();
 void cfgLoad();
 void cfgPushRecent(char arr[][512], int& cnt, const char* path);
 
+// Gamepad bindings 16..25 are analog axes. padAxes() order: lx, ly, rx, ry, lt, rt.
+inline void padAxes(const GamepadState& gp, float* a) {
+    a[0] = gp.leftX;  a[1] = gp.leftY;  a[2] = gp.rightX;
+    a[3] = gp.rightY; a[4] = gp.leftTrigger; a[5] = gp.rightTrigger;
+}
+inline constexpr uint8_t kAxisOfBind[10] = { 1, 1, 0, 0, 3, 3, 2, 2, 4, 5 };   // id-16 -> axis index
+inline constexpr bool gpBindPositive(int id) { return (id & 1) || id >= 24; }  // else negative direction
+
+// Big menu mode (3x5 bitmap font). Auto picks it on large terminals.
+// Build with -DTRETRO_NO_BIG_UI to compile it out entirely.
+#ifdef TRETRO_NO_BIG_UI
+inline constexpr bool uiBigMode(int, int) { return false; }
+#else
+inline bool uiBigMode(int w, int h) {
+    const int s = get_cfg().menu_scale;
+    return s == 0 ? (w >= 160 && h >= 50) : (s == 2);
+}
+#endif
+inline constexpr int uiBarH(bool big) { return big ? 7 : 1; }
+
 enum class MenuSec { FILE_, OPTIONS, GAME, CONSOLE };
 
 struct FileBrowser {
     bool active           = false;
     bool append_disc_mode = false;
-    char current_dir[512] = ".";
+    char current_dir[512] = ".";     // "" = the drive list (Windows)
     PodVector<DynString> files;
+    PodVector<size_t>    sizes;      // per entry, read lazily the first time a row is drawn
     int  num_files        = 0;
 };
 
@@ -160,17 +177,6 @@ struct MenuState {
     int scroll_offset  = 0;
 };
 
-struct CtxProxy {
-    PodVector<PodVector<ConsoleCell>>*& buffer;
-    int &screen_w, &screen_h, &cursor_x, &cursor_y, &window_start_x, &window_width;
-    int &clip_x, &clip_y, &clip_w, &clip_h;
-
-    CtxProxy(ImDrawState& s)
-        : buffer(s.buffer), screen_w(s.screen_w), screen_h(s.screen_h)
-        , cursor_x(s.cursor_x), cursor_y(s.cursor_y), window_start_x(s.window_x)
-        , window_width(s.window_w), clip_x(s.clip_x), clip_y(s.clip_y)
-        , clip_w(s.clip_w), clip_h(s.clip_h) {}
-};
 
 class RetroUI : public UI {
 public:
@@ -192,19 +198,13 @@ public:
     static constexpr const char* status_browser_short    = " ENTER:Select ESC:Close";
     static constexpr const char* status_picker           = " [ENTER] Select [ESC] Back";
     static constexpr const char* status_picker_short     = " ENTER:Select ESC:Back";
-    static constexpr const char* status_downloader       = " [ENTER] Select [ESC] Back";
-    static constexpr const char* status_downloader_short = " ENTER:Select ESC:Back";
     static constexpr const char* status_default          = " [ENTER] Select [Q/E] Switch Tab [F1] Resume";
     static constexpr const char* status_default_short    = " ENTER:Select Q/E:Tabs F1:Resume";
     static constexpr const char* status_default_vshort   = " ENT:Sel Q/E:Tabs F1:Resume";
     static constexpr const char* status_no_game          = " [ENTER] Select [Q/E] Switch Tab";
 
     static constexpr const char* status_gp_browser          = " (A) Select (B) Close";
-    static constexpr const char* status_gp_browser_short    = " (A) Select (B) Close";
     static constexpr const char* status_gp_picker           = " (A) Select (B) Back";
-    static constexpr const char* status_gp_picker_short     = " (A) Select (B) Back";
-    static constexpr const char* status_gp_downloader       = " (A) Select (B) Back";
-    static constexpr const char* status_gp_downloader_short = " (A) Select (B) Back";
     static constexpr const char* status_gp_default          = " (A) Select (LB/RB) Switch Tab (View+Menu) Resume";
     static constexpr const char* status_gp_default_short    = " (A) Select (LB/RB) Tabs (View+Menu) Resume";
     static constexpr const char* status_gp_default_vshort   = " (A) Sel (LB/RB) Tabs (View+Menu) Resume";
@@ -237,38 +237,54 @@ public:
     int  m_mouse_x = 0, m_mouse_y = 0;
     bool m_mouse_moved = false, m_mouse_clicked = false;
     bool m_enter = false, m_left = false, m_right = false, m_up = false, m_down = false, m_tab = false;
+    bool m_home = false, m_end = false, m_pgup = false, m_pgdn = false;   // list jumps
+    int  m_last_visible = 8;                                              // rows per page for PgUp/PgDn
     bool m_keyboard_gamepad_active = false;
     bool m_is_gamepad_mode         = false;
 
     bool is_mono  = false;
+#ifdef TRETRO_NO_BIG_UI
+    static constexpr bool big_mode = false;
+#else
     bool big_mode = false;
+#endif
     float fps_display_value = 0.0f;
     const InputManager* input_ptr = nullptr;
     BorderStyle border_style;
     MenuState   menu;
-    CtxProxy    ctx;
 
     RetroUI();
 
     inline int  getItemHeight() const { return big_mode ? 6 : 1; }
+    inline int  cw() const { return big_mode ? 4 : 1; }
+    inline int  barH() const { return uiBarH(big_mode); }
     inline bool hitTest(int x, int y, int w, int h) const {
         return (unsigned)(m_mouse_x - x) < (unsigned)w && (unsigned)(m_mouse_y - y) < (unsigned)h;
     }
     inline void highlightRow(int y, RGBColor bg, bool sel) {
-        FillHighlight(ctx.window_start_x + 1, y, ctx.window_width - 2, getItemHeight(), bg, sel);
+        FillHighlight(state.window_x + 1, y, state.window_w - 2, getItemHeight(), bg, sel);
     }
     inline bool isTriggered() const { return m_left || m_right || m_enter; }
 
     void updateAnim(float dt);
     void handleBack();
-    void DrawBigText(PodVector<PodVector<ConsoleCell>>& buffer, int x, int y, const char* str, RGBColor fg, RGBColor bg, int w, int h, int clip_end_x);
+    void DrawBigText(int x, int y, const char* str, RGBColor fg, RGBColor bg, int clip_end_x);
     void DrawUIText(const char* label, RGBColor fg);
     void DrawSeparator();
     void DrawSectionHeader(const char* title);
     void browserScan();
-    void tryPickCoreForContent(const char* content_path);
+    void browserUp();
+    void browserEnter(const char* name);
+    enum class PickMode { Browse, Startup, Drop };
+    void tryPickCoreForContent(const char* content_path, PickMode mode = PickMode::Browse);
+    void clearPicker();
 
     bool handleRowHover(int target_idx, int& row_y, int& end_x);
+    RGBColor selFg(bool sel, RGBColor idle) const;
+    RGBColor selBg(bool sel, RGBColor idle) const;
+    RGBColor rowStyle(int row_y, bool sel, RGBColor idle_fg);
+    void resetNav();
+    void requestLoad(const char* core, const char* content = nullptr, bool close = true);
     bool MenuOption(const char* label, const char* val);
 
     void bindInput(const InputManager* inp) { input_ptr = inp; }
@@ -278,20 +294,23 @@ public:
     void render(PodVector<PodVector<ConsoleCell>>& buffer, int w, int h);
 
 private:
+    void putLine(int x, int y, const ConsoleGlyph& thin);
     void drawShadow   (int sx, int sy, int sw, int sh);
     void fillRect     (int sx, int sy, int sw, int sh, RGBColor bg);
     void DrawNormalText(int x, int y, const char* str, RGBColor fg, RGBColor bg, int clip_end_x);
+    void fillCells(int x, int y, int w, int h, const ConsoleGlyph& g, RGBColor fg, RGBColor bg, int y_min, int y_max, bool border = false);
     void FillHighlight(int x, int y, int w_fill, int h_fill, RGBColor bg, bool sel);
-    void drawOverlayBox(int bx, int by, int bw, int bh, const char* title, bool mono, int div_y = -1);
+    void drawOverlayBox(int bx, int by, int bw, int bh, const char* title, int div_y = -1);
     void drawBorderRect(int x, int y, int w, int h, RGBColor col, RGBColor bg, int div_y = -1);
 
     void handleInput();
     void handleNavigation();
     void calculatePopupGeometry(int w, int h, float anim, int& px, int& py, int& pw, int& ph);
-    void renderBackground(int w, int h, bool is_mono);
-    void fillBarRow(int y_start, int bar_h, int w, int h, bool is_mono, RGBColor bar_bg);
-    void renderTopBar(int w, int h, float anim, bool is_mono);
-    void renderBottomBar(int w, int h, float anim, bool is_mono);
+    void renderBackground(int w, int h);
+    void fillBarRow(int y_start, int bar_h, int w, int h);
+    void drawBottomBar(int w, int h, int bot_y, const char* status);
+    void renderTopBar(int w, int h, float anim);
+    void renderBottomBar(int w, int h, float anim);
 
     int  computeVisibleWindow(int py, int ph, int& scroll_offset);
     void renderStickyHeader();
@@ -299,19 +318,20 @@ private:
 
     void beginSection(const char* title, int px, int py, int pw, int ph);
     void drawSectionTitle(const char* title);
-    UI_NOINLINE void renderBrowser(int w, int h, int px, int py, int pw, int ph, bool is_mono);
-    UI_NOINLINE void renderDownloader(int w, int h, int px, int py, int pw, int ph, bool is_mono);
-    UI_NOINLINE void renderCorePicker(int w, int h, int px, int py, int pw, int ph, bool is_mono);
+    UI_NOINLINE void renderBrowser(int px, int py, int pw, int ph);
+    UI_NOINLINE void renderDownloader(int px, int py, int pw, int ph);
+    UI_NOINLINE void renderCorePicker(int px, int py, int pw, int ph);
     UI_NOINLINE void renderFileSection(int px, int py, int pw, int ph);
     UI_NOINLINE void renderOptionsSection(int px, int py, int pw, int ph);
     UI_NOINLINE void renderGameSection(int px, int py, int pw, int ph);
-    UI_NOINLINE void renderConsoleSection(int w, int h, int px, int py, int pw, int ph, bool is_mono);
-    UI_NOINLINE void renderInGameBottomBar(int w, int h, float ease_slide, bool mono);
+    UI_NOINLINE void renderConsoleSection(int px, int py, int pw, int ph);
+    UI_NOINLINE void renderInGameBottomBar(int w, int h, float ease_slide);
 
-    UI_NOINLINE void renderStatsOverlay(int w, int h, float ease_slide, bool mono);
-    UI_NOINLINE void renderLogOverlay  (int w, int h, float ease_slide, bool mono);
+    UI_NOINLINE void renderStatsOverlay(int w, int h, float ease_slide);
+    UI_NOINLINE void renderLogOverlay  (float ease_slide);
 
-    void drawScaledText(int x, int y, const char* str, RGBColor fg, RGBColor bg = {-1, -1, -1}, int end_x = -1);
+    void drawScaledText(int x, int y, const char* str, RGBColor fg);
+    void drawScaledText(int x, int y, const char* str, RGBColor fg, RGBColor bg, int end_x);
     void drawScrollingText(int x, int y, const char* str, RGBColor fg, RGBColor bg, int clip_end_x, bool sel);
 
     bool optionCycleInt(int& val, int step, int min_val, int max_val, bool left_dir, bool right_dir);

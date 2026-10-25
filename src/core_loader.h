@@ -3,11 +3,14 @@
 #define CORE_LOADER_H
 
 #include "libretro.h"
+#include <stddef.h>
+#include <string.h>
 
 extern void tretro_log(const char* fmt, ...);
 
 #ifdef _WIN32
-#  ifndef WIN32_LEAN_AND_MEAN          
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
 #  endif
 #  include <windows.h>
    typedef HMODULE LibHandle;
@@ -52,17 +55,8 @@ typedef void     (*fn_retro_set_audio_sample_batch)    (retro_audio_sample_batch
 typedef void     (*fn_retro_set_input_poll)            (retro_input_poll_t);
 typedef void     (*fn_retro_set_input_state)           (retro_input_state_t);
 
-#define LOAD_REQUIRED(name)                                          \
-    name = reinterpret_cast<fn_retro_##name>(                       \
-               lib_sym(handle, "retro_" #name));                    \
-    if (!name) {                                                     \
-        tretro_log("[core] missing symbol: retro_" #name);           \
-        unload(); return false;                                      \
-    }
-
-#define LOAD_OPTIONAL(name)                                          \
-    name = reinterpret_cast<fn_retro_##name>(                       \
-               lib_sym(handle, "retro_" #name));
+// Loader views the function-pointer members below as one contiguous table.
+typedef void* __attribute__((may_alias)) AliasPtr;
 
 struct LibretroCore {
     LibHandle handle = nullptr;
@@ -94,6 +88,9 @@ struct LibretroCore {
 
     bool loaded() const { return handle != nullptr; }
 
+    // Number of leading members that must resolve; the rest are optional.
+    static constexpr int kRequired = 15, kTotal = 23;
+
     bool load(const char* path) {
         handle = lib_open(path);
         if (!handle) {
@@ -101,31 +98,30 @@ struct LibretroCore {
             return false;
         }
 
-        LOAD_REQUIRED(init)
-        LOAD_REQUIRED(deinit)
-        LOAD_REQUIRED(api_version)
-        LOAD_REQUIRED(get_system_info)
-        LOAD_REQUIRED(get_system_av_info)
-        LOAD_REQUIRED(reset)
-        LOAD_REQUIRED(run)
-        LOAD_REQUIRED(load_game)
-        LOAD_REQUIRED(unload_game)
-        LOAD_REQUIRED(set_environment)
-        LOAD_REQUIRED(set_video_refresh)
-        LOAD_REQUIRED(set_audio_sample)
-        LOAD_REQUIRED(set_audio_sample_batch)
-        LOAD_REQUIRED(set_input_poll)
-        LOAD_REQUIRED(set_input_state)
+        // Same order as the members init..set_input_state, then serialize_size..load_game_special.
+        static const char kNames[] =
+            "init\0deinit\0api_version\0get_system_info\0get_system_av_info\0reset\0run\0"
+            "load_game\0unload_game\0set_environment\0set_video_refresh\0set_audio_sample\0"
+            "set_audio_sample_batch\0set_input_poll\0set_input_state\0"
+            "serialize_size\0serialize\0unserialize\0set_controller_port_device\0get_region\0"
+            "get_memory_data\0get_memory_size\0load_game_special\0";
+        static_assert(offsetof(LibretroCore, load_game_special) == offsetof(LibretroCore, init) + (kTotal - 1) * sizeof(void*),
+                      "function pointers must be contiguous");
 
-        LOAD_OPTIONAL(serialize_size)
-        LOAD_OPTIONAL(serialize)
-        LOAD_OPTIONAL(unserialize)
-        LOAD_OPTIONAL(set_controller_port_device)
-        LOAD_OPTIONAL(get_region)
-        LOAD_OPTIONAL(get_memory_data)
-        LOAD_OPTIONAL(get_memory_size)
-        LOAD_OPTIONAL(load_game_special)
-
+        AliasPtr* slot = reinterpret_cast<AliasPtr*>(&init);
+        const char* name = kNames;
+        char sym[48] = "retro_";
+        for (int i = 0; i < kTotal; ++i, ++slot) {
+            size_t len = strlen(name) + 1;
+            memcpy(sym + 6, name, len);
+            *slot = lib_sym(handle, sym);
+            if (!*slot && i < kRequired) {
+                tretro_log("[core] missing symbol: %s", sym);
+                unload();
+                return false;
+            }
+            name += len;
+        }
         return true;
     }
 
@@ -135,7 +131,5 @@ struct LibretroCore {
     }
 };
 
-#undef LOAD_REQUIRED
-#undef LOAD_OPTIONAL
 
-#endif 
+#endif

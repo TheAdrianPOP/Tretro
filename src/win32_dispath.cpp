@@ -98,44 +98,7 @@ void checkPastedPathWindows(Frontend& f, RetroUI& ui, const char* exe_path) {
         return;
     }
 
-    ui.core_picker.candidates.clear();
-    ui.core_picker.library_names.clear();
-    ui.core_picker.ext_counts.clear();
-
-    int matched = 0;
-    int num = autodetectCoreMulti(found_path,
-                                  ui.core_picker.candidates, 
-                                  &matched, 
-                                  &ui.core_picker.library_names, 
-                                  &ui.core_picker.ext_counts);
-
-    if (num == 0) {
-        f.logMessage("[ERR] No cores installed for '%s'", found_path);
-        return;
-    }
-
-    if (matched == 1) {
-        safeCopy(ui.pending_core, ui.core_picker.candidates[0].c_str(), sizeof(ui.pending_core));
-        safeCopy(ui.pending_content, found_path, sizeof(ui.pending_content));
-        ui.pending_load = true;
-        ui.core_picker.active = false;
-        ui.open = false;
-
-        const char* fn = getPathFilename(found_path);
-        f.logMessage("[loader] Loading '%s' with core '%s'", fn ? fn : found_path, ui.core_picker.candidates[0].c_str());
-        return;
-    }
-
-    ui.core_picker.no_match       = (matched == 0);
-    ui.core_picker.matched_count  = matched;
-    ui.core_picker.num_candidates = num;
-    ui.core_picker.scroll_offset  = 0;
-    ui.menu.selected_index        = 0;
-    ui.core_picker.active         = true;
-    ui.browser.active             = false;
-    ui.pending_load               = false;
-    safeCopy(ui.core_picker.content_path, found_path, sizeof(ui.core_picker.content_path));
-    ui.open = true;
+    ui.tryPickCoreForContent(found_path, RetroUI::PickMode::Drop);
 }
 
 #endif

@@ -9,9 +9,6 @@
 #define strcasecmp _stricmp
 #endif
 
-template<typename T> static inline T rt_min(T a, T b) { return (a < b) ? a : b; }
-template<typename T> static inline T rt_max(T a, T b) { return (a > b) ? a : b; }
-template<typename T> static inline T rt_clamp(T val, T lo, T hi) { return (val < lo) ? lo : ((val > hi) ? hi : val); }
 template<typename T> static inline void rt_swap(T& a, T& b) { T tmp = a; a = b; b = tmp; }
 static inline float rt_fmod(float val, float mod) { return (mod > 0.0f) ? (val - (int)(val / mod) * mod) : 0.0f; }
 
@@ -29,7 +26,7 @@ static int splitPipes(const char* s, StrToken* tokens, int max_tokens) {
     return count;
 }
 
-static inline void putCellChecked(CtxProxy& ctx, int x, int y, ConsoleGlyph g, RGBColor fg, RGBColor bg, bool border = false) {
+static inline void putCellChecked(ImDrawState& ctx, int x, int y, ConsoleGlyph g, RGBColor fg, RGBColor bg, bool border = false) {
     if ((unsigned)x < (unsigned)ctx.screen_w && (unsigned)y < (unsigned)ctx.screen_h) {
         auto& c = (*ctx.buffer)[y][x];
         c.character = g; c.color = fg; c.is_ui = true; c.is_border = border;
@@ -75,10 +72,16 @@ const int AppSettings::default_gamepad_mappings[BIND_COUNT] = {
     20, 21, 22, 23
 };
 
+void AppSettings::resetBindings() {
+    memcpy(key_mappings, default_key_mappings, sizeof(key_mappings));
+    memcpy(gamepad_mappings, default_gamepad_mappings, sizeof(gamepad_mappings));
+}
+
+AppSettings::AppSettings() : recent_cores{}, recent_content{} { resetBindings(); }
+
 const char* const RetroUI::tab_names[4]       = { "FILE", "OPTIONS", "GAME", "CONSOLE" };
 const char* const RetroUI::tab_names_short[4] = { "FILE", "OPTS", "GAME", "LOGS" };
 
-static const char* const shadow_ramp[] = { " ", "░", "▒", "▓", "█" };
 static const char kResetCore[]  = "Reset Core";
 static const char kCtrlR[]      = "Ctrl+R";
 static const char kCtrlQ[]      = "Ctrl+Q";
@@ -104,8 +107,8 @@ static const char* getBarTip(bool gp, int tip, int var) {
     if (gp) {
         switch (tip) {
             case TIP_BROWSER:    return RetroUI::status_gp_browser;
-            case TIP_PICKER:     return RetroUI::status_gp_picker;
-            case TIP_DOWNLOADER: return RetroUI::status_gp_downloader;
+            case TIP_PICKER:
+            case TIP_DOWNLOADER: return RetroUI::status_gp_picker;
             case TIP_NOGAME:     return RetroUI::status_gp_no_game;
             default:
                 return (var == 2) ? RetroUI::status_gp_default_vshort
@@ -115,8 +118,8 @@ static const char* getBarTip(bool gp, int tip, int var) {
     }
     switch (tip) {
         case TIP_BROWSER:    return (var > 0) ? RetroUI::status_browser_short    : RetroUI::status_browser;
-        case TIP_PICKER:     return (var > 0) ? RetroUI::status_picker_short     : RetroUI::status_picker;
-        case TIP_DOWNLOADER: return (var > 0) ? RetroUI::status_downloader_short : RetroUI::status_downloader;
+        case TIP_PICKER:
+        case TIP_DOWNLOADER: return (var > 0) ? RetroUI::status_picker_short : RetroUI::status_picker;
         case TIP_NOGAME:     return RetroUI::status_no_game;
         default:
             return (var == 2) ? RetroUI::status_default_vshort
@@ -142,69 +145,59 @@ static uint64_t    s_prev_key_states[8] = {0};
 static uint16_t    s_prev_gp_buttons    = 0;
 static int         s_prev_mx = -1, s_prev_my = -1;
 static bool        s_prev_mb = false;
-static float       s_prev_lx = 0.f, s_prev_ly = 0.f, s_prev_rx = 0.f, s_prev_ry = 0.f, s_prev_lt = 0.f, s_prev_rt = 0.f;
+static float       s_prev_ax[6] = {};   // lx, ly, rx, ry, lt, rt
 static bool        s_prev_view_menu = false, s_wait_view_menu_release = false, s_was_open = false;
 static int         s_dl_act = 0, s_game_act = 2;
 
-static inline bool isMonoMode() { return g_cfg.color_mode == ColorMode::Monochrome; }
 static inline RGBColor monoSelFg(bool sel) { return sel ? Colors::TAB_ACTIVE : Colors::BG; }
 static inline int getTabWidth(const char* name, bool big) { return (int)(strlen(name) + (big ? 2 : 4)) * (big ? 4 : 1); }
 
 void RetroUI::drawShadow(int sx, int sy, int sw, int sh) {
-    if (!ctx.buffer) return;
-    const bool mono = isMonoMode();
+    if (!state.buffer) return;
+    const bool mono = is_mono;
     RGBColor s_col = mono ? Colors::INACTIVE : Colors::SHADOW, bg_col = mono ? Colors::MENU_BG : Colors::SHADOW;
-    ConsoleGlyph g = ConsoleGlyph(mono ? shadow_ramp[2] : " ");
-    for (int y = sy + 1; y <= sy + sh; ++y) putCellChecked(ctx, sx + sw, y, g, s_col, bg_col);
+    ConsoleGlyph g = ConsoleGlyph(mono ? kShadowRamp[2] : " ");
+    for (int y = sy + 1; y <= sy + sh; ++y) putCellChecked(state, sx + sw, y, g, s_col, bg_col);
     int by = sy + sh;
-    for (int x = sx + 1; x <= sx + sw; ++x) putCellChecked(ctx, x, by, g, s_col, bg_col);
+    for (int x = sx + 1; x <= sx + sw; ++x) putCellChecked(state, x, by, g, s_col, bg_col);
 }
 
 void RetroUI::fillRect(int sx, int sy, int sw, int sh, RGBColor bg) {
-    if (!ctx.buffer) return;
-    auto& buffer = *ctx.buffer;
-    const bool mono = isMonoMode();
-    RGBColor bcol = mono ? Colors::TAB_ACTIVE : Colors::BORDER, def_bg = mono ? RGBColor{0,0,0} : bg;
-    ConsoleGlyph edge_glyph = ConsoleGlyph(mono ? shadow_ramp[4] : " "), space_glyph = ConsoleGlyph(" ");
+    const RGBColor black{0,0,0};
+    fillCells(sx, sy, sw, sh, ConsoleGlyph(" "), Colors::MENU_BG, is_mono ? black : bg, 0, state.screen_h);
+    if (!big_mode) return;
 
-    int y_start = rt_max(0, sy), y_end = rt_min(sy + sh, ctx.screen_h);
-    int x_start = rt_max(0, sx), x_end = rt_min(sx + sw, ctx.screen_w);
-
-    for (int y = y_start; y < y_end; ++y) {
-        bool edge_y = big_mode && (y == sy || y == sy + sh - 1);
-        auto& row = buffer[y];
-        for (int x = x_start; x < x_end; ++x) {
-            auto& cell = row[x];
-            cell.is_ui = true;
-            bool edge = edge_y || (big_mode && (x == sx || x == sx + sw - 1));
-            cell.character = edge ? edge_glyph : space_glyph;
-            cell.color     = edge ? bcol : Colors::MENU_BG;
-            cell.bg_color  = edge ? (mono ? RGBColor{0,0,0} : bcol) : def_bg;
-            cell.is_border = edge && !mono;
-        }
-    }
+    // Big mode: 1-cell solid frame.
+    const ConsoleGlyph edge(is_mono ? kShadowRamp[4] : " ");
+    const RGBColor ecol = is_mono ? Colors::TAB_ACTIVE : Colors::BORDER, ebg = is_mono ? black : Colors::BORDER;
+    const int H = state.screen_h;
+    fillCells(sx, sy,           sw, 1, edge, ecol, ebg, 0, H, !is_mono);
+    fillCells(sx, sy + sh - 1,  sw, 1, edge, ecol, ebg, 0, H, !is_mono);
+    fillCells(sx,           sy, 1, sh, edge, ecol, ebg, 0, H, !is_mono);
+    fillCells(sx + sw - 1,  sy, 1, sh, edge, ecol, ebg, 0, H, !is_mono);
 }
 
 void RetroUI::drawBorderRect(int x, int y, int w, int h, RGBColor col, RGBColor bg, int div_y) {
-    if (!ctx.buffer || big_mode) return;
+    if (!state.buffer || big_mode) return;
     struct Corner { int dx, dy; ConsoleGlyph BorderStyle::*g; };
     static const Corner corners[4] = {
         { 0, 0, &BorderStyle::tl }, { 1, 0, &BorderStyle::tr },
         { 0, 1, &BorderStyle::bl }, { 1, 1, &BorderStyle::br }
     };
-    for (const auto& c : corners) putCellChecked(ctx, x + (c.dx ? w - 1 : 0), y + (c.dy ? h - 1 : 0), border_style.*(c.g), col, bg);
+    for (const auto& c : corners) putCellChecked(state, x + (c.dx ? w - 1 : 0), y + (c.dy ? h - 1 : 0), border_style.*(c.g), col, bg);
     for (int cx = x + 1; cx < x + w - 1; ++cx) {
-        putCellChecked(ctx, cx, y,         border_style.h, col, bg);
-        putCellChecked(ctx, cx, y + h - 1, border_style.h, col, bg);
-        if (div_y > 0 && div_y < h - 1) putCellChecked(ctx, cx, y + div_y, border_style.div, col, bg);
+        putCellChecked(state, cx, y,         border_style.h, col, bg);
+        putCellChecked(state, cx, y + h - 1, border_style.h, col, bg);
+        if (div_y > 0 && div_y < h - 1) putCellChecked(state, cx, y + div_y, border_style.div, col, bg);
     }
     for (int cy = y + 1; cy < y + h - 1; ++cy) {
-        putCellChecked(ctx, x,         cy, border_style.v, col, bg);
-        putCellChecked(ctx, x + w - 1, cy, border_style.v, col, bg);
+        putCellChecked(state, x,         cy, border_style.v, col, bg);
+        putCellChecked(state, x + w - 1, cy, border_style.v, col, bg);
     }
 }
 
-void RetroUI::drawOverlayBox(int bx, int by, int bw, int bh, const char* title, bool mono, int div_y) {
+void RetroUI::drawOverlayBox(int bx, int by, int bw, int bh, const char* title, int div_y) {
+    const bool mono = is_mono;
     drawShadow(bx, by, bw, bh);
     fillRect(bx, by, bw, bh, Colors::BG);
 
@@ -217,8 +210,8 @@ void RetroUI::drawOverlayBox(int bx, int by, int bw, int bh, const char* title, 
         if (div_y > 0 && div_y < bh - 1) {
             int dy = by + div_y;
             RGBColor bcol = mono ? Colors::TAB_ACTIVE : Colors::BORDER;
-            ConsoleGlyph g = mono ? ConsoleGlyph(shadow_ramp[4]) : ConsoleGlyph(" ");
-            for (int cx = bx + 1; cx < bx + bw - 1; ++cx) putCellChecked(ctx, cx, dy, g, bcol, bcol);
+            ConsoleGlyph g = mono ? ConsoleGlyph(kShadowRamp[4]) : ConsoleGlyph(" ");
+            for (int cx = bx + 1; cx < bx + bw - 1; ++cx) putCellChecked(state, cx, dy, g, bcol, bcol);
         }
         int title_x = bx + (bw - (int)strlen(title) * 4) / 2;
         drawScaledText(title_x, by + 1, title, title_fg, {-1, -1, -1}, clip_x);
@@ -226,42 +219,43 @@ void RetroUI::drawOverlayBox(int bx, int by, int bw, int bh, const char* title, 
 }
 
 void RetroUI::DrawNormalText(int x, int y, const char* str, RGBColor fg, RGBColor bg, int clip_end_x) {
-    if (!ctx.buffer || y < s_win_top || y >= s_win_bot || y >= ctx.screen_h) return;
-    auto& row = (*ctx.buffer)[y];
+    if (!state.buffer || y < s_win_top || y >= s_win_bot || y >= state.screen_h) return;
+    auto& row = (*state.buffer)[y];
     for (int i = 0; str[i] && x + i <= clip_end_x; ++i) {
         int cx = x + i;
-        if ((unsigned)cx >= (unsigned)ctx.screen_w) continue;
+        if ((unsigned)cx >= (unsigned)state.screen_w) continue;
         auto& c = row[cx];
         c.character = ConsoleGlyph(str[i]); c.color = fg; c.is_ui = true; c.is_border = false;
         if (!bg.isReset()) c.bg_color = bg;
     }
 }
 
-void RetroUI::DrawBigText(PodVector<PodVector<ConsoleCell>>& buffer, int x, int y, const char* str, RGBColor fg, RGBColor bg, int w, int h, int clip_end_x) {
-    bool mono = isMonoMode();
-    int max_x = rt_min(w, clip_end_x);
+void RetroUI::DrawBigText(int x, int y, const char* str, RGBColor fg, RGBColor bg, int clip_end_x) {
+    const ConsoleGlyph solid(is_mono ? kShadowRamp[4] : " "), blank(" ");
+    const bool has_bg = !bg.isReset();
+    const int max_x = fast_min_t(state.screen_w, clip_end_x);
 
-    for (int i = 0; str[i] && x < clip_end_x; i++, x += 4) {
-        unsigned char ch = (unsigned char)str[i];
+    for (; *str && x < clip_end_x; ++str, x += 4) {
+        unsigned ch = (unsigned char)*str;
         if (ch < 32 || ch > 127) continue;
-        uint16_t glyph_bits = kFont3x5.glyphs[ch - 32];
+        const uint16_t glyph_bits = kFont3x5.glyphs[ch - 32];
 
         for (int row = 0; row < 5; row++) {
             int py = y + row;
-            if (py < s_win_top || py >= s_win_bot || py >= h) continue;
-            auto& row_cells = buffer[py];
+            if (py < s_win_top || py >= s_win_bot || py >= state.screen_h) continue;
+            auto& row_cells = (*state.buffer)[py];
             int bits = (glyph_bits >> ((4 - row) * 3)) & 7;
 
             for (int col = 0; col < 3; col++) {
                 int px = x + col;
                 if ((unsigned)px >= (unsigned)max_x) continue;
                 auto& c = row_cells[px];
-                if (bits & (1 << (2 - col))) {
-                    c.character = ConsoleGlyph(mono ? shadow_ramp[4] : " ");
+                if (bits & (4 >> col)) {
+                    c.character = solid;
                     c.color     = fg;
-                    c.bg_color  = mono ? (bg.isReset() ? c.bg_color : bg) : fg;
-                } else if (!bg.isReset()) {
-                    c.character = ConsoleGlyph(" "); c.bg_color = bg;
+                    c.bg_color  = is_mono ? (has_bg ? bg : c.bg_color) : fg;
+                } else if (has_bg) {
+                    c.character = blank; c.bg_color = bg;
                 } else continue;
                 c.is_ui = true; c.is_border = false;
             }
@@ -269,28 +263,29 @@ void RetroUI::DrawBigText(PodVector<PodVector<ConsoleCell>>& buffer, int x, int 
     }
 }
 
-void RetroUI::FillHighlight(int x, int y, int w_fill, int h_fill, RGBColor bg, bool sel) {
-    if (!ctx.buffer || (isMonoMode() && !sel)) return;
-    auto& buffer = *ctx.buffer;
-    bool mono = isMonoMode();
-
-    int y_start = rt_max(s_win_top, y), y_end = rt_min(s_win_bot, rt_min(ctx.screen_h, y + h_fill));
-    int x_start = rt_max(0, x), x_end = rt_min(ctx.screen_w, x + w_fill);
-    ConsoleGlyph glyph = ConsoleGlyph(mono ? shadow_ramp[1] : " ");
-    RGBColor col = mono ? Colors::TAB_ACTIVE : RGBColor{0,0,0}, bg_col = mono ? RGBColor{0,0,0} : bg;
-
-    for (int py = y_start; py < y_end; ++py) {
-        auto& row = buffer[py];
-        for (int cx = x_start; cx < x_end; ++cx) {
+// Fills a clipped rect (rows limited to [y_min, y_max)) with one glyph/colour pair.
+void RetroUI::fillCells(int x, int y, int w, int h, const ConsoleGlyph& g, RGBColor fg, RGBColor bg, int y_min, int y_max, bool border) {
+    if (!state.buffer) return;
+    const int y0 = fast_max_t(y_min, y), y1 = fast_min_t(fast_min_t(y_max, state.screen_h), y + h);
+    const int x0 = fast_max_t(0, x),     x1 = fast_min_t(state.screen_w, x + w);
+    for (int py = y0; py < y1; ++py) {
+        auto& row = (*state.buffer)[py];
+        for (int cx = x0; cx < x1; ++cx) {
             auto& c = row[cx];
-            c.character = glyph; c.color = col; c.bg_color = bg_col; c.is_ui = true; c.is_border = false;
+            c.character = g; c.color = fg; c.bg_color = bg; c.is_ui = true; c.is_border = border;
         }
     }
 }
 
+void RetroUI::FillHighlight(int x, int y, int w_fill, int h_fill, RGBColor bg, bool sel) {
+    if (is_mono && !sel) return;
+    fillCells(x, y, w_fill, h_fill, ConsoleGlyph(is_mono ? kShadowRamp[1] : " "),
+              is_mono ? Colors::TAB_ACTIVE : RGBColor{0,0,0}, is_mono ? RGBColor{0,0,0} : bg, s_win_top, s_win_bot);
+}
+
 int RetroUI::computeVisibleWindow(int py, int ph, int& scroll_offset) {
     int item_h = getItemHeight();
-    int visible = rt_max(1, (py + ph - 1 - ctx.cursor_y) / item_h);
+    int visible = fast_max_t(1, (py + ph - 1 - state.cursor_y) / item_h);
     if (menu.selected_index < scroll_offset) scroll_offset = menu.selected_index;
     if (menu.selected_index >= scroll_offset + visible) scroll_offset = menu.selected_index - visible + 1;
     if (scroll_offset < 0) scroll_offset = 0;
@@ -301,42 +296,46 @@ void RetroUI::renderStickyHeader() {
     if (!s_sticky_label) return;
     int draw_y = s_win_top + s_sticky_y_offset;
     highlightRow(draw_y, Colors::BG, true);
-    drawScaledText(ctx.window_start_x + 2, draw_y, s_sticky_label, s_sticky_color);
+    drawScaledText(state.window_x + 2, draw_y, s_sticky_label, s_sticky_color);
 }
 
 void RetroUI::snapViewport(int& row_y, int item_h) {
     int top_limit = s_win_top + (s_sticky_label ? item_h : 0);
     if (row_y < top_limit) {
         int diff = top_limit - row_y;
-        s_tab_scroll -= diff; ctx.cursor_y += diff; row_y += diff;
+        s_tab_scroll -= diff; state.cursor_y += diff; row_y += diff;
     } else if (row_y + item_h > s_win_bot) {
         int diff = (row_y + item_h) - s_win_bot;
-        s_tab_scroll += diff; ctx.cursor_y -= diff; row_y -= diff;
+        s_tab_scroll += diff; state.cursor_y -= diff; row_y -= diff;
     }
     if (s_tab_scroll < 0) s_tab_scroll = 0;
 }
 
 void RetroUI::DrawUIText(const char* label, RGBColor fg) {
-    int item_h = getItemHeight(), row_y = ctx.cursor_y;
+    int item_h = getItemHeight(), row_y = state.cursor_y;
     if (label && label[0] == '[' && !browser.active && (section == MenuSec::GAME)) {
-        if (row_y <= s_win_top) { s_sticky_label = label; s_sticky_color = fg; s_sticky_y_offset = 0; ctx.cursor_y += item_h; return; }
+        if (row_y <= s_win_top) { s_sticky_label = label; s_sticky_color = fg; s_sticky_y_offset = 0; state.cursor_y += item_h; return; }
         else if (row_y < s_win_top + item_h) s_sticky_y_offset = row_y - (s_win_top + item_h);
     }
-    if (row_y + item_h > s_win_top && row_y < s_win_bot) drawScaledText(ctx.window_start_x + 2, row_y, label, fg);
-    ctx.cursor_y += item_h;
+    if (row_y + item_h > s_win_top && row_y < s_win_bot) drawScaledText(state.window_x + 2, row_y, label, fg);
+    state.cursor_y += item_h;
+}
+
+// Divider cell: the thin glyph normally, a solid block (shaded in mono) in big mode.
+void RetroUI::putLine(int x, int y, const ConsoleGlyph& thin) {
+    ConsoleGlyph g = !big_mode ? thin : ConsoleGlyph(is_mono ? kShadowRamp[4] : " ");
+    putCellChecked(state, x, y, g, is_mono ? Colors::TAB_ACTIVE : Colors::BORDER,
+                   is_mono ? RGBColor{0,0,0} : (big_mode ? Colors::BORDER : Colors::BG));
 }
 
 void RetroUI::DrawSeparator() {
-    int item_h = getItemHeight(), row_y = ctx.cursor_y;
+    int item_h = getItemHeight(), row_y = state.cursor_y;
     if (row_y + item_h > s_win_top && row_y < s_win_bot) {
         int draw_y = big_mode ? row_y + 2 : row_y;
-        bool mono = isMonoMode();
-        ConsoleGlyph glyph = mono ? (big_mode ? ConsoleGlyph(shadow_ramp[4]) : border_style.div) : (big_mode ? ConsoleGlyph(" ") : border_style.div);
-        RGBColor col = mono ? Colors::TAB_ACTIVE : Colors::BORDER, bg = (!mono && big_mode) ? Colors::BORDER : (mono ? RGBColor{0,0,0} : Colors::BG);
-        int x_start = ctx.window_start_x + 1, x_end = rt_min(ctx.screen_w, ctx.window_start_x + ctx.window_width - 1);
-        for (int i = x_start; i < x_end; ++i) putCellChecked(ctx, i, draw_y, glyph, col, bg);
+        int x_end = fast_min_t(state.screen_w, state.window_x + state.window_w - 1);
+        for (int i = state.window_x + 1; i < x_end; ++i) putLine(i, draw_y, border_style.div);
     }
-    ctx.cursor_y += item_h;
+    state.cursor_y += item_h;
 }
 
 void RetroUI::DrawSectionHeader(const char* title) {
@@ -344,15 +343,19 @@ void RetroUI::DrawSectionHeader(const char* title) {
     DrawUIText(title, Colors::STATUS_ACT);
 }
 
+void RetroUI::drawScaledText(int x, int y, const char* str, RGBColor fg) {
+    drawScaledText(x, y, str, fg, RGBColor{-1, -1, -1}, -1);
+}
+
 void RetroUI::drawScaledText(int x, int y, const char* str, RGBColor fg, RGBColor bg, int end_x) {
-    if (end_x < 0) end_x = ctx.window_width > 0 ? (ctx.window_start_x + ctx.window_width - 1) : ctx.screen_w;
-    if (big_mode) DrawBigText(*ctx.buffer, x, y + 1, str, fg, bg, ctx.screen_w, ctx.screen_h, end_x);
+    if (end_x < 0) end_x = state.window_w > 0 ? (state.window_x + state.window_w - 1) : state.screen_w;
+    if (big_mode) DrawBigText(x, y + 1, str, fg, bg, end_x);
     else          DrawNormalText(x, y, str, fg, bg, end_x);
 }
 
 void RetroUI::drawScrollingText(int x, int y, const char* str, RGBColor fg, RGBColor bg, int clip_end_x, bool sel) {
     if (!str || !str[0]) return;
-    int char_w = big_mode ? 4 : 1, avail = (clip_end_x - x) / char_w, len = (int)strlen(str);
+    int char_w = cw(), avail = (clip_end_x - x) / char_w, len = (int)strlen(str);
     if (avail <= 0) return;
 
     if (sel && len > avail) {
@@ -362,21 +365,46 @@ void RetroUI::drawScrollingText(int x, int y, const char* str, RGBColor fg, RGBC
         int off = 0;
         if (phase > pause && phase < pause + scroll_time) off = (int)((phase - pause) * speed);
         else if (phase >= pause + scroll_time)           off = diff;
-        drawScaledText(x, y, str + rt_clamp(off, 0, diff), fg, bg, clip_end_x);
+        drawScaledText(x, y, str + fast_clamp(off, 0, diff), fg, bg, clip_end_x);
     } else {
         drawScaledText(x, y, str, fg, bg, clip_end_x);
     }
 }
 
 bool RetroUI::handleRowHover(int target_idx, int& row_y, int& end_x) {
-    row_y = ctx.cursor_y; end_x = ctx.window_start_x + ctx.window_width - 1;
+    row_y = state.cursor_y; end_x = state.window_x + state.window_w - 1;
     int item_h = getItemHeight();
     int top_limit = s_win_top + (s_sticky_label ? item_h : 0);
-    if (row_y >= top_limit && row_y + item_h <= s_win_bot && !m_keyboard_gamepad_active && hitTest(ctx.window_start_x, row_y, ctx.window_width, item_h)) {
+    if (row_y >= top_limit && row_y + item_h <= s_win_bot && !m_keyboard_gamepad_active && hitTest(state.window_x, row_y, state.window_w, item_h)) {
         if (m_mouse_moved || m_mouse_clicked) menu.selected_index = target_idx;
         if (m_mouse_clicked) m_enter = true;
     }
     return (menu.selected_index == target_idx);
+}
+
+RGBColor RetroUI::selFg(bool sel, RGBColor idle) const {
+    return is_mono ? monoSelFg(sel) : (sel ? Colors::TAB_ACTIVE : idle);
+}
+
+RGBColor RetroUI::selBg(bool sel, RGBColor idle) const {
+    return is_mono ? Colors::MENU_BG : (sel ? Colors::STATUS_ACT : idle);
+}
+
+// Paints the row highlight and returns the text color to use on it.
+RGBColor RetroUI::rowStyle(int row_y, bool sel, RGBColor idle_fg) {
+    highlightRow(row_y, selBg(sel, Colors::BG), sel);
+    return selFg(sel, idle_fg);
+}
+
+void RetroUI::resetNav() { menu.selected_index = s_tab_scroll = 0; }
+
+// Queues a core (and optionally content) load; null content keeps the previous one.
+// close=false leaves the menu open (it closes itself once the load succeeds).
+void RetroUI::requestLoad(const char* core, const char* content, bool close) {
+    safeCopy(pending_core, core);
+    if (content) safeCopy(pending_content, content);
+    pending_load = true;
+    if (close) { core_picker.active = false; open = false; }
 }
 
 bool RetroUI::MenuOption(const char* label, const char* val) {
@@ -386,18 +414,15 @@ bool RetroUI::MenuOption(const char* label, const char* val) {
     if (sel && !browser.active) snapViewport(row_y, getItemHeight());
 
     if (row_y + getItemHeight() > s_win_top && row_y < s_win_bot) {
-        RGBColor bg = is_mono ? Colors::MENU_BG : (sel ? Colors::STATUS_ACT : Colors::BG);
-        RGBColor fg = is_mono ? monoSelFg(sel) : (sel ? Colors::TAB_ACTIVE : Colors::TEXT_DEF);
-
-        highlightRow(row_y, bg, sel);
+        RGBColor fg = rowStyle(row_y, sel, Colors::TEXT_DEF);
         int val_len = (val && val[0]) ? (int)strlen(val) : 0;
-        int char_w  = big_mode ? 4 : 1;
-        int start_x = ctx.window_start_x + (big_mode ? 3 : 2);
+        int char_w  = cw();
+        int start_x = state.window_x + (big_mode ? 3 : 2);
         int lbl_end = end_x - 1;
 
         if (val_len > 0) {
-            int total_chars = rt_max(1, (end_x - start_x) / char_w);
-            int val_chars   = rt_min(val_len, rt_max(6, (total_chars * 2) / 5));
+            int total_chars = fast_max_t(1, (end_x - start_x) / char_w);
+            int val_chars   = fast_min_t(val_len, fast_max_t(6, (total_chars * 2) / 5));
             int val_x       = end_x - val_chars * char_w - 2;
             lbl_end         = val_x - (big_mode ? 2 : 1);
             RGBColor val_fg = (is_mono || sel) ? Colors::TAB_ACTIVE : Colors::BAR_FILL;
@@ -405,13 +430,13 @@ bool RetroUI::MenuOption(const char* label, const char* val) {
         }
         drawScrollingText(start_x, row_y, label, fg, {-1, -1, -1}, lbl_end, sel);
     }
-    ctx.cursor_y += getItemHeight();
+    state.cursor_y += getItemHeight();
     return sel;
 }
 
 bool RetroUI::optionCycleInt(int& val, int step, int min_val, int max_val, bool left_dir, bool right_dir) {
     if (!left_dir && !right_dir) return false;
-    val = rt_clamp(val + (left_dir ? -step : step), min_val, max_val);
+    val = fast_clamp(val + (left_dir ? -step : step), min_val, max_val);
     return true;
 }
 
@@ -496,10 +521,10 @@ static void getCoreOptionDisplay(const CoreVar& cv, char* out_lbl, size_t lbl_sz
         StrToken raw_toks[32], lbl_toks[32];
         int r_count = splitPipes(cv.raw.c_str(), raw_toks, 32);
         int l_count = splitPipes(cv.raw_labels.c_str(), lbl_toks, 32);
-        int cur_len = (int)strlen(cur), limit = rt_min(r_count, l_count);
+        int cur_len = (int)strlen(cur), limit = fast_min_t(r_count, l_count);
         for (int i = 0; i < limit; ++i) {
             if (raw_toks[i].len == cur_len && memcmp(raw_toks[i].p, cur, cur_len) == 0) {
-                int copy_len = rt_min(lbl_toks[i].len, (int)val_sz - 1);
+                int copy_len = fast_min_t(lbl_toks[i].len, (int)val_sz - 1);
                 memcpy(out_val, lbl_toks[i].p, copy_len);
                 out_val[copy_len] = '\0';
                 found_label = true; break;
@@ -524,50 +549,167 @@ static void getCoreOptionDisplay(const CoreVar& cv, char* out_lbl, size_t lbl_sz
     }
 }
 
+static const char kBrowserErr[] = "[Error reading dir]";
+
+
+// Directories first, then case-insensitive by name (directory names carry a trailing '/').
+static bool browserBefore(const char* a, const char* b) {
+    size_t la = strlen(a), lb = strlen(b);
+    bool dir_a = la > 0 && a[la - 1] == '/', dir_b = lb > 0 && b[lb - 1] == '/';
+    return dir_a != dir_b ? dir_a : strcasecmp(a, b) < 0;
+}
+
+// "812 B", "64 KB", "1.5 MB", "2.3 GB"
+static void fmtSize(char* out, size_t sz, size_t bytes) {
+    if (bytes < 1024)               snprintf(out, sz, "%u B", (unsigned)bytes);
+    else if (bytes < 1024 * 1024)   snprintf(out, sz, "%u KB", (unsigned)(bytes >> 10));
+    else {
+        const bool gb = bytes >= ((size_t)1 << 30);
+        const unsigned long long t = (unsigned long long)bytes * 10 >> (gb ? 30 : 20);
+        snprintf(out, sz, "%u.%u %s", (unsigned)(t / 10), (unsigned)(t % 10), gb ? "GB" : "MB");
+    }
+}
+
+// Lists browser.current_dir, or the drives when it is empty.
 void RetroUI::browserScan() {
     browser.files.clear();
     browser.num_files = menu.selected_index = menu.scroll_offset = 0;
-    auto entries = FS::listDir(browser.current_dir);
-    if (entries.empty() && !FS::isDir(browser.current_dir)) {
-        browser.files.push_back(DynString("[Error reading dir]"));
-        browser.num_files = 1; return;
+
+#ifdef _WIN32
+    if (!browser.current_dir[0]) {
+        DWORD mask = GetLogicalDrives();
+        for (int d = 0; d < 26; ++d) {
+            if (!(mask & (1u << d))) continue;
+            const char name[4] = { (char)('A' + d), ':', '/', '\0' };
+            browser.files.push_back(DynString(name));
+        }
+        browser.num_files = (int)browser.files.size();
+        return;
     }
+#endif
+
+    auto entries = FS::listDir(browser.current_dir);
     browser.files.push_back(DynString(".."));
+    if (entries.empty() && !FS::isDir(browser.current_dir)) {
+        browser.files.push_back(DynString(kBrowserErr));
+        browser.num_files = 2; return;
+    }
     for (const auto& e : entries) browser.files.push_back(e.isDirectory ? (e.name + "/") : e.name);
 
-    size_t n = browser.files.size();
-    for (size_t i = 1; i + 1 < n; ++i) {
-        for (size_t j = i + 1; j < n; ++j) {
-            const char *a = browser.files[i].c_str(), *b = browser.files[j].c_str();
-            size_t la = strlen(a), lb = strlen(b);
-            bool dir_a = (la > 0 && a[la - 1] == '/'), dir_b = (lb > 0 && b[lb - 1] == '/');
-            if ((!dir_a && dir_b) || (dir_a == dir_b && strcasecmp(a, b) > 0)) rt_swap(browser.files[i], browser.files[j]);
+    // In-place shell sort after "..": entries are moved, never copied.
+    const int n = (int)browser.files.size();
+    for (int g = n / 2; g > 0; g /= 2) {
+        for (int i = 1 + g; i < n; ++i) {
+            for (int j = i; j - g >= 1 && browserBefore(browser.files[j].c_str(), browser.files[j - g].c_str()); j -= g) {
+                DynString t(static_cast<DynString&&>(browser.files[j]));
+                browser.files[j]     = static_cast<DynString&&>(browser.files[j - g]);
+                browser.files[j - g] = static_cast<DynString&&>(t);
+            }
         }
     }
-    browser.num_files = (int)n;
+    browser.num_files = n;
+    browser.sizes.resize(n);
+    for (int i = 0; i < n; ++i) browser.sizes[i] = (size_t)-1;
 }
 
-void RetroUI::tryPickCoreForContent(const char* content_path) {
+// Cuts a path down to its parent folder in place ("C:/x" -> "C:/", "/x" -> "/"). False if it has no separator.
+static bool cutParent(char* p) {
+    char* s = strrchr(p, '/');
+    char* b = strrchr(p, '\\');
+    if (b > s) s = b;
+    if (!s) return false;
+    s[(s == p || (s == p + 2 && p[1] == ':')) ? 1 : 0] = '\0';
+    return true;
+}
+
+// Parent folder, or the drive list above a drive root.
+void RetroUI::browserUp() {
+    char* dir = browser.current_dir;
+    if (!dir[0]) return;                                          // already at the drive list
+    if (!strchr(dir, '/') && !strchr(dir, '\\') && !(dir[1] == ':' && !dir[2])) {
+        char abs_dir[512];
+        makePathAbsolute(dir, abs_dir, sizeof(abs_dir));          // "." has no visible parent
+        safeCopy(dir, abs_dir, sizeof(browser.current_dir));
+    }
+    size_t len = strlen(dir);
+    while (len > 3 && (dir[len - 1] == '/' || dir[len - 1] == '\\')) dir[--len] = '\0';
+
+    if (len <= 3 && dir[1] == ':') {
+        dir[0] = '\0';                                            // "C:/" -> drives
+    } else if (!cutParent(dir)) {
+        return;
+    }
+    browserScan();
+}
+
+// Opens a listed folder; `name` carries the trailing '/'.
+void RetroUI::browserEnter(const char* name) {
+    if (!browser.current_dir[0]) {
+        safeCopy(browser.current_dir, name);                      // drive: "C:/"
+    } else {
+        char sub[256];
+        safeCopy(sub, name);
+        sub[strlen(sub) - 1] = '\0';
+        safeCopy(browser.current_dir, FS::join(browser.current_dir, sub).c_str(), sizeof(browser.current_dir));
+    }
+    browserScan();
+}
+
+void RetroUI::clearPicker() {
+    core_picker.active = core_picker.no_match = false;
+    core_picker.matched_count = core_picker.num_candidates = 0;
+    core_picker.candidates.clear(); core_picker.library_names.clear(); core_picker.ext_counts.clear();
+}
+
+// Finds cores for content. The three callers differ only in log text and menu handling:
+//   Browse  - file browser / recent list: show picker if anything was found
+//   Startup - command-line content: always resets selection and keeps the menu open
+//   Drop    - dragged/pasted path: a single match loads immediately
+void RetroUI::tryPickCoreForContent(const char* content_path, PickMode mode) {
     core_picker.candidates.clear(); core_picker.library_names.clear(); core_picker.ext_counts.clear();
     core_picker.no_match = false;
-    safeCopy(core_picker.content_path, content_path, sizeof(core_picker.content_path));
 
     int matched = 0;
-    core_picker.num_candidates = autodetectCoreMulti(
-        content_path, core_picker.candidates, &matched, &core_picker.library_names, &core_picker.ext_counts);
-    core_picker.matched_count = matched;
+    const int n = autodetectCoreMulti(content_path, core_picker.candidates, &matched,
+                                      &core_picker.library_names, &core_picker.ext_counts);
+    Frontend& f = Frontend::get();
+
+    if (mode == PickMode::Drop) {
+        if (n == 0) { f.logMessage("[ERR] No cores installed for '%s'", content_path); return; }
+        if (matched == 1) {
+            const char* fn = getPathFilename(content_path);
+            requestLoad(core_picker.candidates[0].c_str(), content_path);
+            f.logMessage("[loader] Loading '%s' with core '%s'", fn ? fn : content_path, core_picker.candidates[0].c_str());
+            return;
+        }
+    }
+
+    safeCopy(core_picker.content_path, content_path);
+    core_picker.num_candidates = n;
+    core_picker.matched_count  = matched;
     browser.active = pending_load = false;
 
-    if (core_picker.num_candidates > 0) {
+    if (n > 0 || mode == PickMode::Startup) {
         core_picker.no_match = (matched == 0);
-        core_picker.active = open = true;
         core_picker.scroll_offset = menu.selected_index = 0;
+    }
+    if (n > 0) {
+        core_picker.active = open = true;
+        if (mode == PickMode::Startup) f.logMessage("[loader] Showing core picker for: %s", content_path);
+    } else if (mode == PickMode::Startup) {
+        f.logMessage("[ERR] No cores found for: %s", content_path);
+        open = true;
     } else {
-        Frontend::get().logMessage("[ERR] No cores found for '%s'", content_path);
+        f.logMessage("[ERR] No cores found for '%s'", content_path);
     }
 }
 
-RetroUI::RetroUI() : UI(), ctx(state) {
+RetroUI::RetroUI() : UI() {
+    // The file browser starts in the folder of the last loaded content.
+    char last[512];
+    safeCopy(last, g_cfg.num_recent_content > 0 ? g_cfg.recent_content[0] : "");
+    if (cutParent(last) && FS::isDir(last)) safeCopy(browser.current_dir, last);
+
     open = true;
     cmd_buffer[0] = '\0';
     cmd_active = false;
@@ -575,7 +717,7 @@ RetroUI::RetroUI() : UI(), ctx(state) {
 
 void RetroUI::updateAnim(float dt) {
     float dir = open ? 1.f : -1.f;
-    anim_progress = rt_clamp(anim_progress + dir * dt / 0.25f, 0.f, 1.f);
+    anim_progress = fast_clamp(anim_progress + dir * dt / 0.25f, 0.f, 1.f);
 }
 
 void RetroUI::update(float dt, const Vec3& pos, const Vec3& dir, float fps, const Vec3& vel, bool grounded, bool show_ui) {
@@ -597,14 +739,14 @@ void RetroUI::update(float dt, const Vec3& pos, const Vec3& dir, float fps, cons
 
         if (new_logs > 0) {
             s_total_logs_written += new_logs;
-            m_transient_log_ttl = (m_transient_log_ttl <= 0.0f) ? 4.0f : rt_min(m_transient_log_ttl, 3.6f);
+            m_transient_log_ttl = (m_transient_log_ttl <= 0.0f) ? 4.0f : fast_min_t(m_transient_log_ttl, 3.6f);
         }
         m_last_log_head = f.console_log_head;
         m_last_log_count = f.console_log_count;
     }
 
     if (m_transient_log_ttl > 0.0f) {
-        m_transient_log_ttl = rt_max(0.0f, m_transient_log_ttl - dt);
+        m_transient_log_ttl = fast_max_t(0.0f, m_transient_log_ttl - dt);
         if (m_transient_log_ttl == 0.0f) s_last_processed_log = s_total_logs_written;
     }
 }
@@ -612,14 +754,9 @@ void RetroUI::update(float dt, const Vec3& pos, const Vec3& dir, float fps, cons
 void RetroUI::handleBack() {
     if (m_binding_button_id != -1) { m_binding_button_id = -1; m_binding_wait_release = false; return; }
     if (browser.active)            { browser.active = browser.append_disc_mode = false; menu.selected_index = 0; return; }
-    if (core_picker.active) {
-        core_picker.active = core_picker.no_match = false;
-        core_picker.matched_count = core_picker.num_candidates = 0;
-        core_picker.candidates.clear(); core_picker.library_names.clear(); core_picker.ext_counts.clear();
-        menu.selected_index = 0; return;
-    }
+    if (core_picker.active) { clearPicker(); menu.selected_index = 0; return; }
     if (downloader.active) { downloader.active = false; menu.selected_index = 0; return; }
-    if (s_input_submenu)   { s_input_submenu = false; menu.selected_index = s_tab_scroll = 0; return; }
+    if (s_input_submenu)   { s_input_submenu = false; resetNav(); return; }
 }
 
 static inline char applyShift(char ch) {
@@ -629,8 +766,14 @@ static inline char applyShift(char ch) {
     return p ? "_+{}|:\"<>?~"[p - "-=[]\\;',./`"] : ch;
 }
 
+static bool anyAxisBeyond(const float* a, float thr) {
+    for (int i = 0; i < 6; ++i) if (a[i] < -thr || a[i] > thr) return true;
+    return false;
+}
+
 void RetroUI::handleInput() {
     m_up = m_down = m_left = m_right = m_enter = m_tab = false;
+    m_home = m_end = m_pgup = m_pgdn = false;
     if (!input_ptr) return;
 
     bool key_pressed[KEY_COUNT] = {false}, any_kbd_event = false;
@@ -653,6 +796,8 @@ void RetroUI::handleInput() {
 
     bool gp_pressed[16] = {false}, any_gp_event = false;
     const GamepadState& gp = globalGamepad().state(g_cfg.p1_gamepad_index);
+    float axes[6];
+    padAxes(gp, axes);
     if (gp.connected) {
         for (int b = 0; b < 16; ++b) {
             bool btn_down = gp.buttons[b];
@@ -661,8 +806,7 @@ void RetroUI::handleInput() {
             if (btn_down) s_prev_gp_buttons |= (1 << b);
             else          s_prev_gp_buttons &= ~(1 << b);
         }
-        const float axes[] = { gp.leftX, gp.leftY, gp.rightX, gp.rightY, gp.leftTrigger, gp.rightTrigger };
-        for (float a : axes) if (a < -0.35f || a > 0.35f) { any_gp_event = true; break; }
+        if (anyAxisBeyond(axes, 0.35f)) any_gp_event = true;
     } else {
         s_prev_gp_buttons = 0;
     }
@@ -675,14 +819,11 @@ void RetroUI::handleInput() {
             for (int k = 0; k < KEY_COUNT && !any_held; ++k) if (input_ptr->isKeyDown(k)) any_held = true;
             if (gp.connected && !any_held) {
                 for (int b = 0; b < 16 && !any_held; ++b) if (gp.buttons[b]) any_held = true;
-                const float axes[] = { gp.leftX, gp.leftY, gp.rightX, gp.rightY, gp.leftTrigger, gp.rightTrigger };
-                for (float a : axes) if (a < -0.4f || a > 0.4f) { any_held = true; break; }
+                if (anyAxisBeyond(axes, 0.4f)) any_held = true;
             }
             if (!any_held) {
                 m_binding_wait_release = false;
-                s_prev_lx = gp.leftX;       s_prev_ly = gp.leftY;
-                s_prev_rx = gp.rightX;      s_prev_ry = gp.rightY;
-                s_prev_lt = gp.leftTrigger; s_prev_rt = gp.rightTrigger;
+                memcpy(s_prev_ax, axes, sizeof(axes));
             }
             return;
         }
@@ -693,22 +834,13 @@ void RetroUI::handleInput() {
         if (target_key == -1 && gp.connected) {
             for (int b = 0; b < 16; ++b) if (gp_pressed[b]) { target_gp = b; break; }
             if (target_gp == -1) {
-                struct AxisRule { float cur, prev; bool pos; uint8_t id; };
-                const AxisRule rules[] = {
-                    { gp.leftY, s_prev_ly, false, 16 }, { gp.leftY, s_prev_ly, true, 17 },
-                    { gp.leftX, s_prev_lx, false, 18 }, { gp.leftX, s_prev_lx, true, 19 },
-                    { gp.rightY, s_prev_ry, false, 20 }, { gp.rightY, s_prev_ry, true, 21 },
-                    { gp.rightX, s_prev_rx, false, 22 }, { gp.rightX, s_prev_rx, true, 23 },
-                    { gp.leftTrigger, s_prev_lt, true, 24 }, { gp.rightTrigger, s_prev_rt, true, 25 }
-                };
-                for (const auto& r : rules) {
-                    if (r.pos ? (r.prev <= 0.4f && r.cur > 0.6f) : (r.prev >= -0.4f && r.cur < -0.6f)) {
-                        target_gp = r.id; break;
-                    }
+                for (int id = 16; id < 26; ++id) {
+                    int ai = kAxisOfBind[id - 16];
+                    float cur = axes[ai], prev = s_prev_ax[ai];
+                    bool pos = gpBindPositive(id);
+                    if (pos ? (prev <= 0.4f && cur > 0.6f) : (prev >= -0.4f && cur < -0.6f)) { target_gp = id; break; }
                 }
-                s_prev_lx = gp.leftX;       s_prev_ly = gp.leftY;
-                s_prev_rx = gp.rightX;      s_prev_ry = gp.rightY;
-                s_prev_lt = gp.leftTrigger; s_prev_rt = gp.rightTrigger;
+                memcpy(s_prev_ax, axes, sizeof(axes));
             }
         }
 
@@ -769,11 +901,14 @@ void RetroUI::handleInput() {
         handleBack(); menu.selected_index = 0;
     }
     if (kbd_prev_tab || gp_pressed[(int)GamepadButton::LBumper]) {
-        section = (MenuSec)(((int)section + 3) % 4); menu.selected_index = s_tab_scroll = 0;
+        section = (MenuSec)(((int)section + 3) % 4); resetNav();
     }
     if (input_ptr->isKeyDown(KEY_CONTROL) && key_pressed[KEY_Q]) wants_quit = true;
 
-    if (m_up || m_down || m_left || m_right || m_tab || m_enter || kbd_prev_tab) m_keyboard_gamepad_active = true;
+    m_home = key_pressed[KEY_HOME]; m_end = key_pressed[KEY_END];
+    m_pgup = key_pressed[KEY_PGUP]; m_pgdn = key_pressed[KEY_PGDN];
+
+    if (m_up || m_down || m_left || m_right || m_tab || m_enter || kbd_prev_tab || m_home || m_end || m_pgup || m_pgdn) m_keyboard_gamepad_active = true;
     if (m_mouse_moved || m_mouse_clicked) m_keyboard_gamepad_active = false;
 }
 
@@ -788,7 +923,12 @@ void RetroUI::handleNavigation() {
     if (!open) return;
     if (m_up && --menu.selected_index < 0) menu.selected_index = last_item_count > 0 ? last_item_count - 1 : 0;
     if (m_down && ++menu.selected_index >= last_item_count) menu.selected_index = 0;
-    if (m_tab) { section = (MenuSec)(((int)section + 1) % 4); menu.selected_index = s_tab_scroll = 0; }
+    const int last = fast_max_t(0, last_item_count - 1);
+    if (m_home) menu.selected_index = 0;
+    if (m_end)  menu.selected_index = last;
+    if (m_pgup) menu.selected_index = fast_max_t(0, menu.selected_index - m_last_visible);
+    if (m_pgdn) menu.selected_index = fast_min_t(last, menu.selected_index + m_last_visible);
+    if (m_tab) { section = (MenuSec)(((int)section + 1) % 4); resetNav(); }
 
     bool can_arrow_tab = (section != MenuSec::OPTIONS && section != MenuSec::GAME && !browser.active && !downloader.active && !core_picker.active && !s_input_submenu);
     if (can_arrow_tab && (m_left || m_right)) {
@@ -798,18 +938,19 @@ void RetroUI::handleNavigation() {
 
 void RetroUI::calculatePopupGeometry(int w, int h, float anim, int& px, int& py, int& pw, int& ph) {
     if (big_mode) {
-        pw = (w < 40) ? (w - 2) : rt_clamp((w * 85) / 100, 120, w - 8);
-        ph = (h < 10) ? (h - 2) : rt_clamp(h - 18, 32, h - 16);
+        pw = (w < 40) ? (w - 2) : fast_clamp((w * 85) / 100, 120, w - 8);
+        ph = (h < 10) ? (h - 2) : fast_clamp(h - 18, 32, h - 16);
     } else {
-        pw = rt_clamp(w - 2, 0, (section == MenuSec::OPTIONS) ? 88 : 64);
-        ph = rt_clamp(h - 4, 0, 22);
+        pw = fast_clamp(w - 2, 0, (section == MenuSec::OPTIONS) ? 88 : 64);
+        ph = fast_clamp(h - 4, 0, 22);
     }
     px = (w - pw) / 2;
     py = (h + 2) + (int)((((h - ph) / 2) - (h + 2)) * anim);
 }
 
-void RetroUI::renderBackground(int w, int h, bool mono) {
-    auto& buffer = *ctx.buffer;
+void RetroUI::renderBackground(int w, int h) {
+    const bool mono = is_mono;
+    auto& buffer = *state.buffer;
     int dim_div = ((int)g_cfg.color_mode == 2) ? 2 : 4;
 
     for (int y = 0; y < h; ++y) {
@@ -818,7 +959,7 @@ void RetroUI::renderBackground(int w, int h, bool mono) {
             auto& cell = row[x];
             if (mono) {
                 for (int l = 1; l <= 4; l++) {
-                    if (!strcmp(cell.character.data, shadow_ramp[l])) { cell.character = ConsoleGlyph(shadow_ramp[l - 1]); break; }
+                    if (!strcmp(cell.character.data, kShadowRamp[l])) { cell.character = ConsoleGlyph(kShadowRamp[l - 1]); break; }
                 }
             } else {
                 if (!cell.bg_color.isReset()) { cell.bg_color.r /= dim_div; cell.bg_color.g /= dim_div; cell.bg_color.b /= dim_div; }
@@ -828,47 +969,31 @@ void RetroUI::renderBackground(int w, int h, bool mono) {
     }
 }
 
-UI_NOINLINE void RetroUI::renderInGameBottomBar(int w, int h, float ease_slide, bool mono) {
-    int bot_h = big_mode ? 7 : 1;
-    int target_bot_y = h - bot_h;
-    int offscreen_bot_y = h;
-    int bot_y = offscreen_bot_y - (int)((offscreen_bot_y - target_bot_y) * ease_slide + 0.5f);
+// Draws the bar at bot_y with centred status text.
+void RetroUI::drawBottomBar(int w, int h, int bot_y, const char* status) {
+    fillBarRow(bot_y, barH(), w, h);
+    drawScaledText(fast_max_t(0, (w - (int)strlen(status) * cw()) / 2), bot_y, status, Colors::TEXT_DEF, {-1, -1, -1}, w);
+}
 
+UI_NOINLINE void RetroUI::renderInGameBottomBar(int w, int h, float ease_slide) {
+    const int bot_h = barH();
+    const int bot_y = fast_max_t(0, h - (int)(bot_h * ease_slide + 0.5f));
     if (bot_y >= h) return;
-    bot_y = rt_max(0, bot_y);
 
-    fillBarRow(bot_y, bot_h, w, h, mono, mono ? Colors::MENU_BG : Colors::STATUS_BG);
+    static const char* const kGpBar[] = { status_gp_ingame, status_gp_ingame_short };
+    static const char* const kKbBar[] = { status_ingame, status_ingame_short, status_ingame_vshort };
+    const bool gp = m_is_gamepad_mode;
+    const char* const* list = gp ? kGpBar : kKbBar;
+    const int n = gp ? 2 : 3;
 
-    bool has_game = !standalone && Frontend::get().core.loaded();
-    int char_w = big_mode ? 4 : 1;
-
-    const char* status = nullptr;
-    if (m_is_gamepad_mode) {
-        if (!has_game) {
-            status = RetroUI::status_gp_ingame_nogame;
-        } else {
-            status = (w >= (int)strlen(RetroUI::status_gp_ingame) * char_w + 2)
-                ? RetroUI::status_gp_ingame
-                : RetroUI::status_gp_ingame_short;
-        }
-    } else {
-        if (!has_game) {
-            status = RetroUI::status_ingame_nogame;
-        } else {
-            if (w >= (int)strlen(RetroUI::status_ingame) * char_w + 2) {
-                status = RetroUI::status_ingame;
-            } else if (w >= (int)strlen(RetroUI::status_ingame_short) * char_w + 2) {
-                status = RetroUI::status_ingame_short;
-            } else if (w >= (int)strlen(RetroUI::status_ingame_vshort) * char_w + 2) {
-                status = RetroUI::status_ingame_vshort;
-            } else {
-                status = RetroUI::status_ingame_nogame;
-            }
+    const char* status = gp ? status_gp_ingame_nogame : status_ingame_nogame;
+    if (!standalone && Frontend::get().core.loaded()) {
+        if (gp) status = list[n - 1];
+        for (int i = 0; i < n; ++i) {
+            if (w >= (int)strlen(list[i]) * cw() + 2) { status = list[i]; break; }
         }
     }
-
-    int tx = rt_max(0, (w - (int)strlen(status) * char_w) / 2);
-    drawScaledText(tx, bot_y, status, Colors::TEXT_DEF, {-1, -1, -1}, w);
+    drawBottomBar(w, h, bot_y, status);
 
     if (m_mouse_clicked && hitTest(0, bot_y, w, bot_h)) {
         open = true;
@@ -876,13 +1001,10 @@ UI_NOINLINE void RetroUI::renderInGameBottomBar(int w, int h, float ease_slide, 
     }
 }
 
-void RetroUI::renderBottomBar(int w, int h, float anim, bool mono) {
-    int bot_h = big_mode ? 7 : 1;
-    int bot_y = h - bot_h + (int)((1.f - anim) * bot_h + 0.5f);
+void RetroUI::renderBottomBar(int w, int h, float anim) {
+    const int bot_h = barH();
+    const int bot_y = fast_max_t(0, h - bot_h + (int)((1.f - anim) * bot_h + 0.5f));
     if (bot_y >= h) return;
-    bot_y = rt_max(0, bot_y);
-
-    fillBarRow(bot_y, bot_h, w, h, mono, mono ? Colors::MENU_BG : Colors::STATUS_BG);
 
     int tip_idx = TIP_DEFAULT;
     if (browser.active)                             tip_idx = TIP_BROWSER;
@@ -890,76 +1012,37 @@ void RetroUI::renderBottomBar(int w, int h, float anim, bool mono) {
     else if (downloader.active)                     tip_idx = TIP_DOWNLOADER;
     else if (standalone || !Frontend::get().core.loaded()) tip_idx = TIP_NOGAME;
 
-    int var = !big_mode ? 0 : (w < 172 ? 2 : 1);
-    const char* status = getBarTip(m_is_gamepad_mode, tip_idx, var);
-    int tx = rt_max(0, (w - (int)strlen(status) * (big_mode ? 4 : 1)) / 2);
-    drawScaledText(tx, bot_y, status, Colors::TEXT_DEF, {-1, -1, -1}, w);
+    drawBottomBar(w, h, bot_y, getBarTip(m_is_gamepad_mode, tip_idx, !big_mode ? 0 : (w < 172 ? 2 : 1)));
 }
 
-void RetroUI::fillBarRow(int y_start, int bar_h, int w, int h, bool mono, RGBColor bar_bg) {
-    auto& buffer = *ctx.buffer;
-    for (int y = 0; y < bar_h; ++y) {
-        int draw_y = y_start + y;
-        if ((unsigned)draw_y >= (unsigned)h) continue;
-        auto& row = buffer[draw_y];
-        for (int x = 0; x < w; ++x) {
-            auto& cell = row[x];
-            if (big_mode && !mono) {
-                UI::SetCell(x, draw_y, ' ', {0,0,0}, bar_bg, true, false);
-                cell.bg_color = bar_bg;
-            } else {
-                cell.character = ConsoleGlyph(shadow_ramp[2]);
-                cell.color = mono ? Colors::STATUS_KEY : bar_bg;
-                cell.bg_color = {0,0,0};
-                cell.is_ui = true; cell.is_border = false;
-            }
-        }
-    }
+void RetroUI::fillBarRow(int y_start, int bar_h, int w, int h) {
+    const RGBColor bar_bg = is_mono ? Colors::MENU_BG : Colors::STATUS_BG;
+    if (big_mode && !is_mono) fillCells(0, y_start, w, bar_h, ConsoleGlyph(" "), RGBColor{0,0,0}, bar_bg, 0, h);
+    else fillCells(0, y_start, w, bar_h, ConsoleGlyph(kShadowRamp[2]), is_mono ? Colors::STATUS_KEY : bar_bg, RGBColor{0,0,0}, 0, h);
 }
 
-void RetroUI::renderTopBar(int w, int h, float anim, bool mono) {
-    auto& buffer = *ctx.buffer; int top_h = big_mode ? 7 : 1, top_y = (int)((anim - 1.f) * top_h);
-    fillBarRow(top_y, top_h, w, h, mono, mono ? Colors::MENU_BG : Colors::STATUS_BG);
+void RetroUI::renderTopBar(int w, int h, float anim) {
+    const int top_h = barH(), top_y = (int)((anim - 1.f) * top_h);
+    fillBarRow(top_y, top_h, w, h);
 
     const char* const* tabs_ptrs = (big_mode && w < 192) ? tab_names_short : tab_names;
     int total_w = 0;
     for (int i = 0; i < 4; ++i) total_w += getTabWidth(tabs_ptrs[i], big_mode);
-    int tx = rt_max(2, (w - total_w) / 2);
+    int tx = fast_max_t(2, (w - total_w) / 2);
 
     for (int i = 0; i < 4; ++i) {
         int tw = getTabWidth(tabs_ptrs[i], big_mode);
         if (m_mouse_clicked && !browser.active && hitTest(tx, top_y, tw, top_h)) {
-            section = (MenuSec)i; menu.selected_index = s_tab_scroll = 0;
+            section = (MenuSec)i; resetNav();
         }
 
         bool sel = (section == (MenuSec)i);
-        RGBColor fg = mono ? monoSelFg(sel) : (sel ? Colors::TAB_ACTIVE : Colors::TAB_IDLE);
-        RGBColor bg = mono ? Colors::MENU_BG : (sel ? Colors::STATUS_ACT : Colors::STATUS_BG);
-        char tbuf[64]; snprintf(tbuf, sizeof(tbuf), big_mode ? " %s " : "  %s  ", tabs_ptrs[i]);
-
-        if (big_mode) {
-            for (int cy = 0; cy < top_h; cy++) {
-                int dy = top_y + cy;
-                if ((unsigned)dy >= (unsigned)h) continue;
-                auto& row = buffer[dy];
-                const char* bg_ch = mono ? (sel ? " " : "░") : " ";
-                for (int cx = 0; cx < tw && tx + cx < w; cx++) {
-                    auto& cell = row[tx + cx];
-                    cell.character = ConsoleGlyph(bg_ch); cell.color = fg; cell.bg_color = bg;
-                    cell.is_ui = true; cell.is_border = false;
-                }
-            }
-            DrawBigText(buffer, tx, top_y + 1, tbuf, fg, {-1,-1,-1}, w, h, w);
-        } else if ((unsigned)top_y < (unsigned)h) {
-            auto& row = buffer[top_y];
-            const char* sp_glyph = mono ? shadow_ramp[1] : " ";
-            for (int c = 0; tbuf[c] && tx + c < w; ++c) {
-                if (tx + c < 0) continue;
-                auto& cell = row[tx + c];
-                cell.character = (tbuf[c] == ' ') ? ConsoleGlyph(sp_glyph) : ConsoleGlyph(tbuf[c]);
-                cell.color = fg; cell.bg_color = bg; cell.is_ui = true; cell.is_border = false;
-            }
-        }
+        RGBColor fg = selFg(sel, Colors::TAB_IDLE);
+        RGBColor bg = selBg(sel, Colors::STATUS_BG);
+        // Tab cell, then its label padded by 1 (big) or 2 (normal) characters.
+        fillCells(tx, top_y, tw, top_h, ConsoleGlyph((is_mono && (!big_mode || !sel)) ? kShadowRamp[1] : " "), fg, bg, 0, h);
+        if (big_mode) DrawBigText(tx + 4, top_y + 1, tabs_ptrs[i], fg, {-1,-1,-1}, w);
+        else          DrawNormalText(tx + 2, top_y, tabs_ptrs[i], fg, {-1,-1,-1}, w - 1);
         tx += tw;
     }
 }
@@ -968,35 +1051,37 @@ void RetroUI::beginSection(const char* title, int px, int py, int pw, int ph) {
     Begin("", px, py, pw, ph, Colors::BORDER, Colors::BG);
     drawSectionTitle(title);
     DrawSeparator();
-    s_win_top = ctx.cursor_y;
-    ctx.cursor_y -= s_tab_scroll;
+    s_win_top = state.cursor_y;
+    state.cursor_y -= s_tab_scroll;
 }
 
 void RetroUI::drawSectionTitle(const char* title) {
-    int item_h = getItemHeight(), row_y = ctx.cursor_y;
+    int item_h = getItemHeight(), row_y = state.cursor_y;
     if (row_y + item_h > s_win_top && row_y < s_win_bot) {
-        int char_w = big_mode ? 4 : 1;
-        int tx = ctx.window_start_x + (ctx.window_width - ((int)strlen(title) * char_w)) / 2;
+        int char_w = cw();
+        int tx = state.window_x + (state.window_w - ((int)strlen(title) * char_w)) / 2;
         drawScaledText(tx, row_y, title, Colors::SELECTED);
     }
-    ctx.cursor_y += item_h;
+    state.cursor_y += item_h;
 }
 
-UI_NOINLINE void RetroUI::renderBrowser(int w, int h, int px, int py, int pw, int ph, bool mono) {
+UI_NOINLINE void RetroUI::renderBrowser(int px, int py, int pw, int ph) {
     Begin("", px, py, pw, ph, Colors::BORDER, Colors::BG);
     drawSectionTitle(browser.append_disc_mode ? "APPEND DISC IMAGE" : "SELECT CONTENT");
     DrawUIText("Directory:", Colors::LABEL);
-    DrawUIText(browser.current_dir, {200,200,200});
+    DrawUIText(browser.current_dir[0] ? browser.current_dir : "This PC", {200,200,200});
     DrawSeparator();
 
-    s_win_top = ctx.cursor_y;
+    s_win_top = state.cursor_y;
     int visible = computeVisibleWindow(py, ph, menu.scroll_offset);
+    const int size_w = 9 * cw();                                  // room for "1023.9 MB"
 
     for (int i = 0; i < visible && menu.scroll_offset + i < browser.num_files; ++i) {
         int idx = menu.scroll_offset + i;
         const char* name = browser.files[idx].c_str();
         size_t nlen = strlen(name);
         bool is_dir = nlen > 0 && name[nlen - 1] == '/';
+        bool is_file = !is_dir && strcmp(name, "..") && strcmp(name, kBrowserErr);
 
         char display[256];
         if (is_dir) {
@@ -1008,25 +1093,27 @@ UI_NOINLINE void RetroUI::renderBrowser(int w, int h, int px, int py, int pw, in
 
         int row_y, end_x;
         bool sel = handleRowHover(idx, row_y, end_x);
-        RGBColor bg = is_mono ? Colors::MENU_BG : (sel ? Colors::STATUS_ACT : Colors::BG);
-        RGBColor fg = is_mono ? monoSelFg(sel) : (sel ? Colors::TAB_ACTIVE : (is_dir ? Colors::BAR_FILL : Colors::TEXT_DEF));
+        RGBColor fg = rowStyle(row_y, sel, (is_dir ? Colors::BAR_FILL : Colors::TEXT_DEF));
+        drawScrollingText(state.window_x + 2, row_y, display, fg, {-1, -1, -1}, end_x - (is_file ? size_w + 2 : 0), sel);
 
-        highlightRow(row_y, bg, sel);
-        drawScrollingText(ctx.window_start_x + 2, row_y, display, fg, {-1, -1, -1}, end_x, sel);
-        ctx.cursor_y += getItemHeight();
+        if (is_file) {
+            size_t& sz = browser.sizes[idx];
+            if (sz == (size_t)-1) sz = FS::fileSize(FS::join(browser.current_dir, name).c_str());
+            char buf[16];
+            fmtSize(buf, sizeof(buf), sz);
+            drawScaledText(end_x - 2 - (int)strlen(buf) * cw(), row_y, buf, sel ? fg : Colors::LABEL);
+        }
+        state.cursor_y += getItemHeight();
 
         if (sel && m_enter) {
             if (!strcmp(name, "..")) {
-                char* slash = strrchr(browser.current_dir, '/');
-                if (!slash) slash = strrchr(browser.current_dir, '\\');
-                if (slash) slash[slash == browser.current_dir ? 1 : 0] = '\0';
-                else       snprintf(browser.current_dir, sizeof(browser.current_dir), ".");
-                browserScan();
+                browserUp();
+                break;
+            } else if (!strcmp(name, kBrowserErr)) {
+                // not a real entry
             } else if (is_dir) {
-                char temp[256]; safeCopy(temp, name, sizeof(temp));
-                temp[strlen(temp)-1] = '\0';
-                safeCopy(browser.current_dir, FS::join(browser.current_dir, temp).c_str(), sizeof(browser.current_dir));
-                browserScan();
+                browserEnter(name);
+                break;
             } else {
                 char full_path[512];
                 safeCopy(full_path, FS::join(browser.current_dir, name).c_str(), sizeof(full_path));
@@ -1046,7 +1133,7 @@ UI_NOINLINE void RetroUI::renderBrowser(int w, int h, int px, int py, int pw, in
     End();
 }
 
-UI_NOINLINE void RetroUI::renderCorePicker(int w, int h, int px, int py, int pw, int ph, bool mono) {
+UI_NOINLINE void RetroUI::renderCorePicker(int px, int py, int pw, int ph) {
     Begin("", px, py, pw, ph, Colors::BORDER, Colors::BG);
     char title[256];
     snprintf(title, sizeof(title), "CHOOSE CORE FOR: %s", getPathFilename(core_picker.content_path));
@@ -1058,7 +1145,7 @@ UI_NOINLINE void RetroUI::renderCorePicker(int w, int h, int px, int py, int pw,
     DrawSeparator();
 
     int total_items = core_picker.num_candidates;
-    s_win_top = ctx.cursor_y;
+    s_win_top = state.cursor_y;
     int visible = computeVisibleWindow(py, ph, core_picker.scroll_offset);
 
     for (int i = 0; i < visible && core_picker.scroll_offset + i < total_items; ++i) {
@@ -1081,18 +1168,13 @@ UI_NOINLINE void RetroUI::renderCorePicker(int w, int h, int px, int py, int pw,
 
         int row_y, end_x;
         bool sel = handleRowHover(idx, row_y, end_x);
-        RGBColor bg = is_mono ? Colors::MENU_BG : (sel ? Colors::STATUS_ACT : Colors::BG);
-        RGBColor fg = is_mono ? monoSelFg(sel) : (sel ? Colors::TAB_ACTIVE : (unmatched ? Colors::INACTIVE : Colors::TEXT_DEF));
-
-        highlightRow(row_y, bg, sel);
-        drawScrollingText(ctx.window_start_x + 2, row_y, display, fg, {-1, -1, -1}, end_x, sel);
-        ctx.cursor_y += getItemHeight();
+        RGBColor fg = rowStyle(row_y, sel, (unmatched ? Colors::INACTIVE : Colors::TEXT_DEF));
+        drawScrollingText(state.window_x + 2, row_y, display, fg, {-1, -1, -1}, end_x, sel);
+        state.cursor_y += getItemHeight();
 
         if (sel && m_enter) {
             m_enter = false;
-            safeCopy(pending_core, path, sizeof(pending_core));
-            safeCopy(pending_content, core_picker.content_path, sizeof(pending_content));
-            pending_load = true; core_picker.active = false; open = false;
+            requestLoad(path, core_picker.content_path);
         }
     }
     menu.item_count = total_items;
@@ -1118,8 +1200,7 @@ UI_NOINLINE static void executeDownloaderAction(RetroUI& ui, CoreDownloadManager
             case 0: {
                 char path[512];
                 downloader_mgr.getCoreFilePath(core.name, path, sizeof(path));
-                safeCopy(ui.pending_core, path, sizeof(ui.pending_core));
-                ui.pending_load = true; ui.open = false;
+                ui.requestLoad(path);
                 break;
             }
             case 1: downloader_mgr.startDownload(core); break;
@@ -1128,7 +1209,7 @@ UI_NOINLINE static void executeDownloaderAction(RetroUI& ui, CoreDownloadManager
     }
 }
 
-UI_NOINLINE void RetroUI::renderDownloader(int w, int h, int px, int py, int pw, int ph, bool mono) {
+UI_NOINLINE void RetroUI::renderDownloader(int px, int py, int pw, int ph) {
     CoreDownloadManager& downloader_mgr = CoreDownloadManager::get();
     downloader_mgr.resetDownloadStatus();
 
@@ -1156,7 +1237,7 @@ UI_NOINLINE void RetroUI::renderDownloader(int w, int h, int px, int py, int pw,
     DrawSeparator();
 
     int core_count = downloader_mgr.getCoreCount(), total_items = core_count + 1;
-    s_win_top = ctx.cursor_y; int visible = computeVisibleWindow(py, ph, downloader.scroll_offset);
+    s_win_top = state.cursor_y; int visible = computeVisibleWindow(py, ph, downloader.scroll_offset);
     int cur_idx = menu.selected_index;
     CoreInfo cur_sel = (cur_idx >= 1 && cur_idx - 1 < core_count) ? downloader_mgr.getCoreInfo(cur_idx - 1) : CoreInfo{};
     bool cur_inst = (cur_idx >= 1 && cur_idx - 1 < core_count) && downloader_mgr.isCoreInstalled(cur_sel.name);
@@ -1171,21 +1252,30 @@ UI_NOINLINE void RetroUI::renderDownloader(int w, int h, int px, int py, int pw,
         int idx = downloader.scroll_offset + i;
         int row_y, end_x;
         bool sel = handleRowHover(idx, row_y, end_x);
-        RGBColor bg = is_mono ? Colors::MENU_BG : (sel ? Colors::STATUS_ACT : Colors::BG);
-        RGBColor fg = is_mono ? monoSelFg(sel) : (sel ? Colors::TAB_ACTIVE : Colors::TEXT_DEF);
-
         CoreInfo cur_core = (idx > 0) ? downloader_mgr.getCoreInfo(idx - 1) : CoreInfo{};
         bool inst = (idx > 0) && downloader_mgr.isCoreInstalled(cur_core.name);
         const char* label = (idx == 0) ? "Refresh Core List" : cur_core.desc;
-        if (idx == 0 && !mono && !sel) fg = Colors::BAR_FILL;
+        RGBColor fg = rowStyle(row_y, sel, idx == 0 ? Colors::BAR_FILL : Colors::TEXT_DEF);
 
-        highlightRow(row_y, bg, sel);
-        drawScaledText(ctx.window_start_x + (big_mode ? 10 : 4), row_y, label, fg);
+        // Row being downloaded: "1.2 MB / 3.4 MB" (just the received size if the total is unknown).
+        const bool dl_row = idx > 0 && downloader_mgr.isDownloadActive() && !strcmp(downloader_mgr.getActiveCoreName(), cur_core.name);
+        char s_str[40] = "";
+        if (dl_row) {
+            char got[16], tot[16];
+            fmtSize(got, sizeof(got), (size_t)downloader_mgr.getDownloadedBytes());
+            if (downloader_mgr.getDownloadTotal() > 0) {
+                fmtSize(tot, sizeof(tot), (size_t)downloader_mgr.getDownloadTotal());
+                snprintf(s_str, sizeof(s_str), "%s / %s", got, tot);
+            } else {
+                safeCopy(s_str, got);
+            }
+        }
+        drawScaledText(state.window_x + (big_mode ? 10 : 4), row_y, label, fg, {-1, -1, -1},
+                       dl_row ? end_x - (int)strlen(s_str) * cw() - 3 : -1);
 
         if (idx > 0) {
-            if (downloader_mgr.isDownloadActive() && strcmp(downloader_mgr.getActiveCoreName(), cur_core.name) == 0) {
-                char s_str[32]; snprintf(s_str, sizeof(s_str), big_mode ? "%.0f%%" : "%.1f%%", downloader_mgr.getDownloadProgress());
-                drawScaledText(end_x - (int)strlen(s_str) * (big_mode ? 4 : 1) - 2, row_y, s_str, Colors::OK);
+            if (dl_row) {
+                drawScaledText(end_x - (int)strlen(s_str) * cw() - 2, row_y, s_str, Colors::OK);
                 if (sel && !m_keyboard_gamepad_active && m_mouse_clicked) m_enter = false;
             } else if (!inst) {
                 int bw = big_mode ? 32 : 12, bx = end_x - (big_mode ? 34 : 14);
@@ -1233,7 +1323,7 @@ UI_NOINLINE void RetroUI::renderDownloader(int w, int h, int px, int py, int pw,
             executeDownloaderAction(*this, downloader_mgr, idx, s_dl_act, inst, cur_core);
             if (idx == 0) { menu.item_count = total_items; End(); return; }
         }
-        ctx.cursor_y += getItemHeight();
+        state.cursor_y += getItemHeight();
     }
     menu.item_count = total_items;
     End();
@@ -1278,7 +1368,7 @@ UI_NOINLINE void RetroUI::renderFileSection(int px, int py, int pw, int ph) {
         DrawSeparator(); DrawUIText(r.title, Colors::LABEL);
         for (int i = 0; i < r.count; ++i) {
             if (MenuOption(getPathFilename(r.arr[i]), "") && m_enter) {
-                if (r.is_core) { safeCopy(pending_core, r.arr[i], sizeof(pending_core)); pending_load = true; }
+                if (r.is_core) requestLoad(r.arr[i], nullptr, false);
                 else           { tryPickCoreForContent(r.arr[i]); }
             }
         }
@@ -1295,38 +1385,40 @@ static const char* const mscales[]    = {"Auto", "Normal", "Large"};
 enum class OptKind : uint8_t { Header, SectionHeader, Toggle, Cycle, Pct };
 enum class PostOptAction : uint8_t { None, UpdateAudio, UpdateRenderer };
 
+static const char* const* const kChoiceSets[] = { rmodes, cmodes, amodes, font_modes, mscales };
+
 struct AppOptionEntry {
-    OptKind            kind;
-    const char*        label;
-    uint16_t           offset;
-    uint8_t            step_or_count;
-    uint8_t            min_val;
-    uint8_t            max_val;
-    PostOptAction      post_action;
-    const char* const* choices;
+    const char*   label;
+    uint16_t      offset;
+    OptKind       kind;
+    uint8_t       step_or_count;
+    uint8_t       min_val;
+    uint8_t       max_val;
+    PostOptAction post_action;
+    uint8_t       choice;        // index into kChoiceSets
 };
 
 static const AppOptionEntry kAppOptions[] = {
-    { OptKind::Header,        " [ VIDEO ]",         0, 0, 0, 0, PostOptAction::None, nullptr },
-    { OptKind::Cycle,         "  Renderer",         (uint16_t)offsetof(AppSettings, renderer_mode), 2, 0, 0, PostOptAction::UpdateRenderer, rmodes },
-    { OptKind::Cycle,         "  Color Mode",       (uint16_t)offsetof(AppSettings, color_mode), 5, 0, 0, PostOptAction::None, cmodes },
-    { OptKind::Toggle,        "  Pixel Mode",        (uint16_t)offsetof(AppSettings, pixel_mode), 0, 0, 0, PostOptAction::None, nullptr },
-    { OptKind::Cycle,         "  Aspect Ratio",      (uint16_t)offsetof(AppSettings, aspect_mode), 5, 0, 0, PostOptAction::None, amodes },
-    { OptKind::Cycle,         "  Terminal Font",     (uint16_t)offsetof(AppSettings, font_width), 2, 0, 0, PostOptAction::None, font_modes },
-    { OptKind::Toggle,        "  Show Statistics",   (uint16_t)offsetof(AppSettings, show_stats_overlay), 0, 0, 0, PostOptAction::None, nullptr },
-    { OptKind::Toggle,        "  Show OSD Logs",     (uint16_t)offsetof(AppSettings, show_log_overlay), 0, 0, 0, PostOptAction::None, nullptr },
-    { OptKind::Toggle,        "  Show Bottom Bar",   (uint16_t)offsetof(AppSettings, show_bottom_bar), 0, 0, 0, PostOptAction::None, nullptr },
-    { OptKind::Toggle,        "  Dithering",         (uint16_t)offsetof(AppSettings, dither_enabled), 0, 0, 0, PostOptAction::None, nullptr },
-    { OptKind::Pct,           "  Brightness",        (uint16_t)offsetof(AppSettings, brightness), 10, 0, 200, PostOptAction::None, nullptr },
-    { OptKind::Pct,           "  Contrast",          (uint16_t)offsetof(AppSettings, contrast), 10, 0, 200, PostOptAction::None, nullptr },
-    { OptKind::SectionHeader, " [ AUDIO ]",         0, 0, 0, 0, PostOptAction::None, nullptr },
-    { OptKind::Toggle,        "  Audio Output",      (uint16_t)offsetof(AppSettings, audio_enabled), 0, 0, 0, PostOptAction::UpdateAudio, nullptr },
-    { OptKind::Pct,           "  Master Volume",     (uint16_t)offsetof(AppSettings, volume_pct), 5, 0, 100, PostOptAction::UpdateAudio, nullptr },
-    { OptKind::SectionHeader, " [ SYSTEM ]",        0, 0, 0, 0, PostOptAction::None, nullptr },
-    { OptKind::Toggle,        "  Pause in Menu",     (uint16_t)offsetof(AppSettings, pause_in_menu), 0, 0, 0, PostOptAction::None, nullptr },
-    { OptKind::Cycle,         "  Menu Scale",        (uint16_t)offsetof(AppSettings, menu_scale), 3, 0, 0, PostOptAction::None, mscales },
-    { OptKind::Toggle,        "  Save on Exit",      (uint16_t)offsetof(AppSettings, auto_save_exit), 0, 0, 0, PostOptAction::None, nullptr },
-    { OptKind::Toggle,        "  Load on Start",     (uint16_t)offsetof(AppSettings, auto_load_start), 0, 0, 0, PostOptAction::None, nullptr },
+    { " [ VIDEO ]", 0, OptKind::Header, 0, 0, 0, PostOptAction::None, 0 },
+    { "  Renderer", (uint16_t)offsetof(AppSettings, renderer_mode), OptKind::Cycle, 2, 0, 0, PostOptAction::UpdateRenderer, 0 },
+    { "  Color Mode", (uint16_t)offsetof(AppSettings, color_mode), OptKind::Cycle, 5, 0, 0, PostOptAction::None, 1 },
+    { "  Pixel Mode", (uint16_t)offsetof(AppSettings, pixel_mode), OptKind::Toggle, 0, 0, 0, PostOptAction::None, 0 },
+    { "  Aspect Ratio", (uint16_t)offsetof(AppSettings, aspect_mode), OptKind::Cycle, 5, 0, 0, PostOptAction::None, 2 },
+    { "  Terminal Font", (uint16_t)offsetof(AppSettings, font_width), OptKind::Cycle, 2, 0, 0, PostOptAction::None, 3 },
+    { "  Show Statistics", (uint16_t)offsetof(AppSettings, show_stats_overlay), OptKind::Toggle, 0, 0, 0, PostOptAction::None, 0 },
+    { "  Show OSD Logs", (uint16_t)offsetof(AppSettings, show_log_overlay), OptKind::Toggle, 0, 0, 0, PostOptAction::None, 0 },
+    { "  Show Bottom Bar", (uint16_t)offsetof(AppSettings, show_bottom_bar), OptKind::Toggle, 0, 0, 0, PostOptAction::None, 0 },
+    { "  Dithering", (uint16_t)offsetof(AppSettings, dither_enabled), OptKind::Toggle, 0, 0, 0, PostOptAction::None, 0 },
+    { "  Brightness", (uint16_t)offsetof(AppSettings, brightness), OptKind::Pct, 10, 0, 200, PostOptAction::None, 0 },
+    { "  Contrast", (uint16_t)offsetof(AppSettings, contrast), OptKind::Pct, 10, 0, 200, PostOptAction::None, 0 },
+    { " [ AUDIO ]", 0, OptKind::SectionHeader, 0, 0, 0, PostOptAction::None, 0 },
+    { "  Audio Output", (uint16_t)offsetof(AppSettings, audio_enabled), OptKind::Toggle, 0, 0, 0, PostOptAction::UpdateAudio, 0 },
+    { "  Master Volume", (uint16_t)offsetof(AppSettings, volume_pct), OptKind::Pct, 5, 0, 100, PostOptAction::UpdateAudio, 0 },
+    { " [ SYSTEM ]", 0, OptKind::SectionHeader, 0, 0, 0, PostOptAction::None, 0 },
+    { "  Pause in Menu", (uint16_t)offsetof(AppSettings, pause_in_menu), OptKind::Toggle, 0, 0, 0, PostOptAction::None, 0 },
+    { "  Menu Scale", (uint16_t)offsetof(AppSettings, menu_scale), OptKind::Cycle, 3, 0, 0, PostOptAction::None, 4 },
+    { "  Save on Exit", (uint16_t)offsetof(AppSettings, auto_save_exit), OptKind::Toggle, 0, 0, 0, PostOptAction::None, 0 },
+    { "  Load on Start", (uint16_t)offsetof(AppSettings, auto_load_start), OptKind::Toggle, 0, 0, 0, PostOptAction::None, 0 },
 };
 
 UI_NOINLINE void RetroUI::renderOptionsSection(int px, int py, int pw, int ph) {
@@ -1335,30 +1427,24 @@ UI_NOINLINE void RetroUI::renderOptionsSection(int px, int py, int pw, int ph) {
     drawSectionTitle("OPTIONS");
     DrawSeparator();
 
-    int content_top = ctx.cursor_y, total_w = pw - 2;
+    int content_top = state.cursor_y, total_w = pw - 2;
     int col1_w = (total_w - 1) / 2, col1_x = px + 1, div_x = col1_x + col1_w;
     int col2_x = div_x + 1, col2_w = px + pw - 1 - col2_x;
-    bool mono = isMonoMode();
 
-    ConsoleGlyph v_glyph = mono ? (big_mode ? ConsoleGlyph(shadow_ramp[4]) : border_style.v) : (big_mode ? ConsoleGlyph(" ") : border_style.v);
-    ConsoleGlyph h_glyph = mono ? (big_mode ? ConsoleGlyph(shadow_ramp[4]) : border_style.div) : (big_mode ? ConsoleGlyph(" ") : border_style.div);
-    RGBColor line_col    = mono ? Colors::TAB_ACTIVE : Colors::BORDER;
-    RGBColor line_bg     = (big_mode && !mono) ? Colors::BORDER : (mono ? RGBColor{0,0,0} : Colors::BG);
-
-    for (int y = content_top; y < py + ph - 1; ++y) putCellChecked(ctx, div_x, y, v_glyph, line_col, line_bg);
+    for (int y = content_top; y < py + ph - 1; ++y) putLine(div_x, y, border_style.v);
 
     int header_h = getItemHeight();
     drawScaledText(col1_x + (big_mode ? 3 : 2), content_top, "[ APP SETTINGS ]", Colors::STATUS_ACT, {-1,-1,-1}, div_x - 1);
     drawScaledText(col2_x + (big_mode ? 3 : 2), content_top, "[ CORE SETTINGS ]", Colors::STATUS_ACT, {-1,-1,-1}, px + pw - 2);
 
     int sep_y = content_top + header_h;
-    for (int x = col1_x; x < px + pw - 1; ++x) putCellChecked(ctx, x, sep_y, h_glyph, line_col, line_bg);
+    for (int x = col1_x; x < px + pw - 1; ++x) putLine(x, sep_y, border_style.div);
 
     int list_top = sep_y + (big_mode ? 2 : 1);
     s_win_top = list_top; s_win_bot = py + ph - 1;
 
-    ctx.window_start_x = col1_x; ctx.window_width = col1_w;
-    s_tab_scroll = s_opt_scroll_left; ctx.cursor_y = list_top - s_opt_scroll_left;
+    state.window_x = col1_x; state.window_w = col1_w;
+    s_tab_scroll = s_opt_scroll_left; state.cursor_y = list_top - s_opt_scroll_left;
 
     for (const auto& opt : kAppOptions) {
         if (opt.kind == OptKind::Toggle && opt.offset == offsetof(AppSettings, dither_enabled) && cfg.color_mode == ColorMode::TrueColor) {
@@ -1370,7 +1456,7 @@ UI_NOINLINE void RetroUI::renderOptionsSection(int px, int py, int pw, int ph) {
         char* base = (char*)&cfg;
         bool changed = false;
         if (opt.kind == OptKind::Toggle)       changed = optToggle(opt.label, *(bool*)(base + opt.offset));
-        else if (opt.kind == OptKind::Cycle)  changed = optCycle(opt.label, opt.choices, *(int*)(base + opt.offset), opt.step_or_count);
+        else if (opt.kind == OptKind::Cycle)  changed = optCycle(opt.label, kChoiceSets[opt.choice], *(int*)(base + opt.offset), opt.step_or_count);
         else if (opt.kind == OptKind::Pct)    changed = optPct(opt.label, *(int*)(base + opt.offset), opt.step_or_count, opt.min_val, opt.max_val);
 
         if (changed) {
@@ -1379,17 +1465,15 @@ UI_NOINLINE void RetroUI::renderOptionsSection(int px, int py, int pw, int ph) {
             } else if (opt.post_action == PostOptAction::UpdateRenderer) {
                 Frontend& fe = Frontend::get();
                 if (!standalone && fe.core.loaded()) {
-                    safeCopy(pending_core, fe.core_path.c_str(), sizeof(pending_core));
-                    safeCopy(pending_content, fe.content_path.c_str(), sizeof(pending_content));
-                    pending_load = true; open = false;
+                    requestLoad(fe.core_path.c_str(), fe.content_path.c_str());
                 }
             }
         }
     }
     s_opt_scroll_left = s_tab_scroll;
 
-    ctx.window_start_x = col2_x; ctx.window_width = col2_w;
-    s_tab_scroll = s_opt_scroll_right; ctx.cursor_y = list_top - s_opt_scroll_right;
+    state.window_x = col2_x; state.window_w = col2_w;
+    s_tab_scroll = s_opt_scroll_right; state.cursor_y = list_top - s_opt_scroll_right;
 
     if (standalone) {
         DrawUIText("  Unavailable in standalone.", Colors::INACTIVE);
@@ -1411,7 +1495,7 @@ UI_NOINLINE void RetroUI::renderOptionsSection(int px, int py, int pw, int ph) {
     if (s_opt_scroll_left > 0)  drawScaledText(col1_x + col1_w - (big_mode ? 6 : 2), content_top, "▲", Colors::LABEL);
     if (s_opt_scroll_right > 0) drawScaledText(px + pw - (big_mode ? 8 : 3), content_top, "▲", Colors::LABEL);
 
-    ctx.window_start_x = px; ctx.window_width = pw;
+    state.window_x = px; state.window_w = pw;
     End();
 }
 
@@ -1423,6 +1507,12 @@ static const uint8_t kBtnW[2][5] = {
     { 5, 5, 8, 8, 10 },
     { 8, 8, 16, 16, 24 }
 };
+
+// Names live in one packed, NUL-separated blob (parallel to the id array).
+static const char* nthName(const char* packed, int n) {
+    while (n-- > 0) packed += strlen(packed) + 1;
+    return packed;
+}
 
 static const char* getKeyName(int key) {
     if (key == -1) return "None";
@@ -1441,24 +1531,30 @@ static const char* getKeyName(int key) {
         return s_buf;
     }
 
-    struct KeyEntry { int16_t key; const char* name; };
-    static const KeyEntry kKeys[] = {
-        { KEY_SPACE, "SPACE" }, { KEY_ENTER, "ENTER" }, { KEY_ESC, "ESC" }, { KEY_BACKSPACE, "BACK" },
-        { KEY_TAB, "TAB" }, { KEY_UP, "UP" }, { KEY_DOWN, "DOWN" }, { KEY_LEFT, "LEFT" }, { KEY_RIGHT, "RIGHT" },
-        { KEY_INSERT, "INSERT" }, { KEY_DELETE, "DEL" }, { KEY_HOME, "HOME" }, { KEY_END, "END" },
-        { KEY_PGUP, "PGUP" }, { KEY_PGDN, "PGDN" }, { KEY_LSHIFT, "LSHIFT" }, { KEY_RSHIFT, "RSHIFT" },
-        { KEY_SHIFT, "SHIFT" }, { KEY_LCONTROL, "LCTRL" }, { KEY_RCONTROL, "RCTRL" }, { KEY_CONTROL, "CTRL" },
-        { KEY_LALT, "LALT" }, { KEY_RALT, "RALT" }, { KEY_ALT, "ALT" }, { KEY_CAPSLOCK, "CAPS" },
-        { KEY_NUMLOCK, "NUM" }, { KEY_SCROLLOCK, "SCROLL" }, { KEY_PRINT, "PRINT" }, { KEY_PAUSE, "PAUSE" },
-        { KEY_GRAVE, "`" }, { KEY_MINUS, "-" }, { KEY_EQUALS, "=" }, { KEY_LBRACKET, "[" }, { KEY_RBRACKET, "]" },
-        { KEY_BACKSLASH, "\\" }, { KEY_SEMICOLON, ";" }, { KEY_APOSTROPHE, "'" }, { KEY_COMMA, "," },
-        { KEY_PERIOD, "." }, { KEY_SLASH, "/" }, { KEY_KP_PERIOD, "KP ." }, { KEY_KP_DIVIDE, "KP /" },
-        { KEY_KP_MULTIPLY, "KP *" }, { KEY_KP_MINUS, "KP -" }, { KEY_KP_PLUS, "KP +" },
-        { KEY_KP_ENTER, "KP ENTER" }, { KEY_KP_EQUALS, "KP =" }
+    static const int16_t kKeyIds[] = {
+        KEY_SPACE, KEY_ENTER, KEY_ESC, KEY_BACKSPACE, KEY_TAB, KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT,
+        KEY_INSERT, KEY_DELETE, KEY_HOME, KEY_END, KEY_PGUP, KEY_PGDN, KEY_LSHIFT, KEY_RSHIFT,
+        KEY_SHIFT, KEY_LCONTROL, KEY_RCONTROL, KEY_CONTROL, KEY_LALT, KEY_RALT, KEY_ALT, KEY_CAPSLOCK,
+        KEY_NUMLOCK, KEY_SCROLLOCK, KEY_PRINT, KEY_PAUSE,
+        KEY_GRAVE, KEY_MINUS, KEY_EQUALS, KEY_LBRACKET, KEY_RBRACKET,
+        KEY_BACKSLASH, KEY_SEMICOLON, KEY_APOSTROPHE, KEY_COMMA,
+        KEY_PERIOD, KEY_SLASH, KEY_KP_PERIOD, KEY_KP_DIVIDE,
+        KEY_KP_MULTIPLY, KEY_KP_MINUS, KEY_KP_PLUS,
+        KEY_KP_ENTER, KEY_KP_EQUALS
     };
+    static const char kKeyNames[] =
+        "SPACE\0ENTER\0ESC\0BACK\0TAB\0UP\0DOWN\0LEFT\0RIGHT\0"
+        "INSERT\0DEL\0HOME\0END\0PGUP\0PGDN\0LSHIFT\0RSHIFT\0"
+        "SHIFT\0LCTRL\0RCTRL\0CTRL\0LALT\0RALT\0ALT\0CAPS\0"
+        "NUM\0SCROLL\0PRINT\0PAUSE\0"
+        "`\0-\0=\0[\0]\0"
+        "\\\0;\0'\0,\0"
+        ".\0/\0KP .\0KP /\0"
+        "KP *\0KP -\0KP +\0"
+        "KP ENTER\0KP =";
 
-    for (const auto& e : kKeys) {
-        if (e.key == key) return e.name;
+    for (unsigned i = 0; i < sizeof(kKeyIds) / sizeof(kKeyIds[0]); ++i) {
+        if (kKeyIds[i] == key) return nthName(kKeyNames, (int)i);
     }
 
     snprintf(s_buf, sizeof(s_buf), "Key %d", key);
@@ -1467,12 +1563,11 @@ static const char* getKeyName(int key) {
 
 static const char* getGpName(int btn_id) {
     if (btn_id == -1) return "None";
-    static const char* const kNames[] = {
-        "Btn A", "Btn B", "Btn X", "Btn Y", "L Bumper", "R Bumper", "L Trigger", "R Trigger",
-        "Start", "Back", "L Stick Click", "R Stick Click", "D-Up", "D-Down", "D-Left", "D-Right",
-        "LS Up", "LS Down", "LS Left", "LS Right", "RS Up", "RS Down", "RS Left", "RS Right", "LT Axis", "RT Axis"
-    };
-    return (btn_id >= 0 && btn_id < (int)(sizeof(kNames) / sizeof(kNames[0]))) ? kNames[btn_id] : "Unknown";
+    static const char kNames[] =
+        "Btn A\0Btn B\0Btn X\0Btn Y\0L Bumper\0R Bumper\0L Trigger\0R Trigger\0"
+        "Start\0Back\0L Stick Click\0R Stick Click\0D-Up\0D-Down\0D-Left\0D-Right\0"
+        "LS Up\0LS Down\0LS Left\0LS Right\0RS Up\0RS Down\0RS Left\0RS Right\0LT Axis\0RT Axis";
+    return (btn_id >= 0 && btn_id < 26) ? nthName(kNames, btn_id) : "Unknown";
 }
 
 struct BindEntry { const char* label; uint8_t id; };
@@ -1515,14 +1610,14 @@ UI_NOINLINE void RetroUI::renderGameSection(int px, int py, int pw, int ph) {
         DrawUIText("[ GENERAL SENSITIVITY ]", Colors::STATUS_ACT);
         optPct("  Cursor Sensitivity", cfg.mouse_sensitivity, 10, 50, 400);
 
-        char p_buf[16];
-        snprintf(p_buf, sizeof(p_buf), "Pad #%d", cfg.p1_gamepad_index + 1);
-        if (MenuOption("  P1 Controller Device", p_buf) && isTriggered()) {
-            optionCycleInt(cfg.p1_gamepad_index, 1, 0, 3, m_left, m_right); cfgSave();
-        }
-        snprintf(p_buf, sizeof(p_buf), "Pad #%d", cfg.p2_gamepad_index + 1);
-        if (MenuOption("  P2 Controller Device", p_buf) && isTriggered()) {
-            optionCycleInt(cfg.p2_gamepad_index, 1, 0, 3, m_left, m_right); cfgSave();
+        static const char* const kPadLabels[2] = { "  P1 Controller Device", "  P2 Controller Device" };
+        for (int p = 0; p < 2; ++p) {
+            int& pad = p ? cfg.p2_gamepad_index : cfg.p1_gamepad_index;
+            char p_buf[16];
+            snprintf(p_buf, sizeof(p_buf), "Pad #%d", pad + 1);
+            if (MenuOption(kPadLabels[p], p_buf) && isTriggered()) {
+                optionCycleInt(pad, 1, 0, 3, m_left, m_right); cfgSave();
+            }
         }
 
         for (const auto& sec : kBindSections) {
@@ -1543,8 +1638,7 @@ UI_NOINLINE void RetroUI::renderGameSection(int px, int py, int pw, int ph) {
         DrawSectionHeader("[ PROFILE DEFAULTS ]");
         if (MenuOption("  Reset All Binds to Default", "") && m_enter) {
             m_enter = false;
-            std::memcpy(cfg.key_mappings, AppSettings::default_key_mappings, sizeof(cfg.key_mappings));
-            std::memcpy(cfg.gamepad_mappings, AppSettings::default_gamepad_mappings, sizeof(cfg.gamepad_mappings));
+            cfg.resetBindings();
             cfgSave(); Frontend::get().saveGameConfig();
         }
         renderStickyHeader();
@@ -1597,7 +1691,7 @@ UI_NOINLINE void RetroUI::renderGameSection(int px, int py, int pw, int ph) {
     if (sel && !browser.active) snapViewport(row_y, getItemHeight());
 
     int bm = big_mode ? 1 : 0;
-    int xp = ctx.window_start_x + (bm ? 30 : 11), xn = xp + (bm ? 22 : 10);
+    int xp = state.window_x + (bm ? 30 : 11), xn = xp + (bm ? 22 : 10);
     int bx_del = end_x - (bm ? 24 : 10);
     int bx_save = exists ? (bx_del - (bm ? 20 : 10)) : (end_x - (bm ? 16 : 8));
     int bx_load = bx_save - (bm ? 20 : 10);
@@ -1627,11 +1721,9 @@ UI_NOINLINE void RetroUI::renderGameSection(int px, int py, int pw, int ph) {
     }
 
     if (row_y + getItemHeight() > s_win_top && row_y < s_win_bot) {
-        RGBColor bg = is_mono ? Colors::MENU_BG : (sel ? Colors::STATUS_ACT : Colors::BG);
-        RGBColor fg = is_mono ? monoSelFg(sel) : (sel ? Colors::TAB_ACTIVE : Colors::TEXT_DEF);
-        highlightRow(row_y, bg, sel);
+        RGBColor fg = rowStyle(row_y, sel, Colors::TEXT_DEF);
 
-        drawScaledText(ctx.window_start_x + (bm ? 4 : 2), row_y, "  Slot", fg);
+        drawScaledText(state.window_x + (bm ? 4 : 2), row_y, "  Slot", fg);
         char slot_c[2] = { (char)('0' + cfg.default_slot), 0 };
         drawScaledText(xp + (bm ? 10 : 6), row_y, slot_c, Colors::TAB_ACTIVE);
         drawScaledText(xn + (bm ? 12 : 7), row_y, time_str, Colors::LABEL, {-1,-1,-1}, b_xs[2] - 2);
@@ -1658,7 +1750,7 @@ UI_NOINLINE void RetroUI::renderGameSection(int px, int py, int pw, int ph) {
             }
         }
     }
-    ctx.cursor_y += getItemHeight();
+    state.cursor_y += getItemHeight();
 
     if (f.disk_control.supported) {
         DrawSectionHeader("[ DISC CONTROL ]");
@@ -1698,13 +1790,14 @@ UI_NOINLINE void RetroUI::renderGameSection(int px, int py, int pw, int ph) {
 
     DrawSectionHeader("[ CONTROLS ]");
     if (MenuOption("  Inputs", "Configure...") && m_enter) {
-        m_enter = false; s_input_submenu = true; menu.selected_index = s_tab_scroll = 0;
+        m_enter = false; s_input_submenu = true; resetNav();
     }
     renderStickyHeader();
     End();
 }
 
-UI_NOINLINE void RetroUI::renderConsoleSection(int w, int h, int px, int py, int pw, int ph, bool mono) {
+UI_NOINLINE void RetroUI::renderConsoleSection(int px, int py, int pw, int ph) {
+    const bool mono = is_mono;
     beginSection("CONSOLE", px, py, pw, ph);
 
     Frontend& f = Frontend::get();
@@ -1724,29 +1817,29 @@ UI_NOINLINE void RetroUI::renderConsoleSection(int w, int h, int px, int py, int
                 RGBColor fg = getLogColor(f.console_logs[idx], mono, sel);
                 RGBColor bg = mono ? RGBColor{-1,-1,-1} : (sel ? Colors::STATUS_ACT : Colors::BG);
                 highlightRow(row_y, bg, sel);
-                drawScaledText(ctx.window_start_x + 2, row_y, f.console_logs[idx], fg, bg, end_x);
+                drawScaledText(state.window_x + 2, row_y, f.console_logs[idx], fg, bg, end_x);
             }
-            ctx.cursor_y += item_h;
+            state.cursor_y += item_h;
         }
     }
 
     s_win_bot = original_win_bot;
-    ctx.cursor_y = s_win_bot - reserve_h;
+    state.cursor_y = s_win_bot - reserve_h;
     DrawSeparator();
 
     int draw_h = big_mode ? 7 : item_h;
-    ctx.cursor_y = s_win_bot - draw_h;
-    int row_y = ctx.cursor_y;
+    state.cursor_y = s_win_bot - draw_h;
+    int row_y = state.cursor_y;
 
-    int clear_w = big_mode ? 28 : 9, text_w = ctx.window_width - clear_w - 2;
-    int clear_x = ctx.window_start_x + 1 + text_w;
+    int clear_w = big_mode ? 28 : 9, text_w = state.window_w - clear_w - 2;
+    int clear_x = state.window_x + 1 + text_w;
     int textbox_idx = menu.item_count++, clear_idx = menu.item_count++;
 
     if (m_left && menu.selected_index == clear_idx)   { menu.selected_index = textbox_idx; m_left = false; }
     if (m_right && menu.selected_index == textbox_idx) { menu.selected_index = clear_idx;   m_right = false; }
 
     if (!m_keyboard_gamepad_active) {
-        if (hitTest(ctx.window_start_x, row_y, text_w, item_h)) {
+        if (hitTest(state.window_x, row_y, text_w, item_h)) {
             if (m_mouse_moved || m_mouse_clicked) menu.selected_index = textbox_idx;
             if (m_mouse_clicked) cmd_active = true;
         } else if (hitTest(clear_x, row_y, clear_w, item_h)) {
@@ -1768,13 +1861,13 @@ UI_NOINLINE void RetroUI::renderConsoleSection(int w, int h, int px, int py, int
     if (cmd_active) snprintf(cmd_display, sizeof(cmd_display), "> %s_", cmd_buffer);
     else            snprintf(cmd_display, sizeof(cmd_display), "Message...");
 
-    renderBox(ctx.window_start_x + 1, text_w, textbox_idx, cmd_display, Colors::TEXT_DEF);
+    renderBox(state.window_x + 1, text_w, textbox_idx, cmd_display, Colors::TEXT_DEF);
     renderBox(clear_x, clear_w, clear_idx, big_mode ? "Clear" : "[Clear]", Colors::ERR);
 
     if (menu.selected_index == textbox_idx && m_enter) { m_enter = false; cmd_active = !cmd_active; }
     if (menu.selected_index == clear_idx && m_enter)   { m_enter = false; f.console_log_count = f.console_log_head = 0; }
 
-    ctx.cursor_y += draw_h;
+    state.cursor_y += draw_h;
     End();
 }
 
@@ -1785,7 +1878,7 @@ void RetroUI::Begin(const char* title, int x, int y, int w, int h, const RGBColo
     RGBColor actual_bg = bg_col.isReset() ? Colors::BG : bg_col;
     fillRect(x, y, w, h, actual_bg);
 
-    bool mono = isMonoMode();
+    const bool mono = is_mono;
     if (!border_col.isReset() && !big_mode) {
         drawBorderRect(x, y, w, h, mono ? Colors::TAB_ACTIVE : border_col, mono ? RGBColor{0,0,0} : actual_bg);
     }
@@ -1796,17 +1889,18 @@ void RetroUI::Begin(const char* title, int x, int y, int w, int h, const RGBColo
     }
 }
 
-UI_NOINLINE void RetroUI::renderStatsOverlay(int w, int h, float ease_slide, bool mono) {
+UI_NOINLINE void RetroUI::renderStatsOverlay(int w, int h, float ease_slide) {
+    const bool mono = is_mono;
     const auto& p = Frontend::get().perf;
-    float pure_core_ms = rt_max(0.0f, p.core_ms - p.blit_ms);
+    float pure_core_ms = fast_max_t(0.0f, p.core_ms - p.blit_ms);
     const char* render_str = (g_cfg.renderer_mode == 1) ? "SW Only" : (Frontend::get().gl.active ? "Headless GL" : "Software");
 
     int box_w = big_mode ? 108 : 27, box_h = big_mode ? 60 : 12;
     int target_x = w - box_w - 2, offscreen_x = w + 2;
-    int box_x = rt_max(0, offscreen_x + (int)((target_x - offscreen_x) * ease_slide));
+    int box_x = fast_max_t(0, offscreen_x + (int)((target_x - offscreen_x) * ease_slide));
     int box_y = (2 + box_h > h) ? 0 : 2;
 
-    drawOverlayBox(box_x, box_y, box_w, box_h, " STATS ", mono);
+    drawOverlayBox(box_x, box_y, box_w, box_h, " STATS ");
 
     RGBColor text_col = mono ? Colors::TAB_ACTIVE : Colors::TEXT_DEF;
     RGBColor sub_col  = mono ? Colors::TAB_ACTIVE : Colors::LABEL;
@@ -1838,29 +1932,30 @@ UI_NOINLINE void RetroUI::renderStatsOverlay(int w, int h, float ease_slide, boo
     snprintf(buf, sizeof(buf), "Render:  %-14s", render_str); drawLine(buf, text_col);
 }
 
-UI_NOINLINE void RetroUI::renderLogOverlay(int w, int h, float ease_slide, bool mono) {
+UI_NOINLINE void RetroUI::renderLogOverlay(float ease_slide) {
+    const bool mono = is_mono;
     Frontend& f = Frontend::get();
-    int logs_to_show = rt_clamp(s_total_logs_written - s_last_processed_log, 0, rt_min(4, f.console_log_count));
+    int logs_to_show = fast_clamp(s_total_logs_written - s_last_processed_log, 0, fast_min_t(4, f.console_log_count));
     if (logs_to_show <= 0) return;
 
     float log_slide = 1.0f;
     if (m_transient_log_ttl < 0.4f) log_slide = m_transient_log_ttl / 0.4f;
     else if (4.0f - m_transient_log_ttl < 0.4f) log_slide = (4.0f - m_transient_log_ttl) / 0.4f;
-    log_slide = rt_clamp(log_slide, 0.0f, 1.0f);
+    log_slide = fast_clamp(log_slide, 0.0f, 1.0f);
     float final_log_ease = ease_slide * (log_slide * log_slide * (3.0f - 2.0f * log_slide));
     if (final_log_ease <= 0.05f) return;
 
-    int start_idx = rt_max(0, f.console_log_count - logs_to_show);
+    int start_idx = fast_max_t(0, f.console_log_count - logs_to_show);
     int actual_show = f.console_log_count - start_idx;
 
     int log_box_w = big_mode ? 120 : 35, log_box_h = big_mode ? (actual_show + 2) * 6 : (actual_show + 2);
     int target_log_x = 2, offscreen_log_x = -log_box_w - 2;
     int log_box_x = offscreen_log_x + (int)((target_log_x - offscreen_log_x) * final_log_ease);
 
-    drawOverlayBox(log_box_x, 2, log_box_w, log_box_h, kRecentLogs, mono);
+    drawOverlayBox(log_box_x, 2, log_box_w, log_box_h, kRecentLogs);
 
     int x_off = big_mode ? 8 : 2, step = big_mode ? 6 : 1;
-    int cur_y = 2 + (big_mode ? 7 : 1), clip_x = log_box_x + log_box_w - (big_mode ? 4 : 2);
+    int cur_y = 2 + (barH()), clip_x = log_box_x + log_box_w - (big_mode ? 4 : 2);
 
     for (int i = 0; i < actual_show; ++i) {
         int idx = (f.console_log_head + start_idx + i) % kMaxConsoleLogs;
@@ -1873,8 +1968,8 @@ UI_NOINLINE void RetroUI::renderLogOverlay(int w, int h, float ease_slide, bool 
 void RetroUI::render(PodVector<PodVector<ConsoleCell>>& buffer, int w, int h) {
     if (w <= 0 || h <= 0) return;
     AppSettings& cfg = g_cfg;
-    ctx.buffer = &buffer; ctx.screen_w = w; ctx.screen_h = h; menu.item_count = 0;
-    ctx.window_start_x = 0; ctx.window_width = w;
+    state.buffer = &buffer; state.screen_w = w; state.screen_h = h; menu.item_count = 0;
+    state.window_x = 0; state.window_w = w;
 
     if (section != s_last_section) {
         s_tab_scroll = s_opt_scroll_left = s_opt_scroll_right = 0;
@@ -1882,16 +1977,18 @@ void RetroUI::render(PodVector<PodVector<ConsoleCell>>& buffer, int w, int h) {
         downloader.active = browser.active = core_picker.active = s_input_submenu = false;
     }
 
-    bool mono = isMonoMode(); is_mono = mono;
-    big_mode = (cfg.menu_scale == 0) ? (w >= 160 && h >= 50) : (cfg.menu_scale == 2);
+    is_mono = (cfg.color_mode == ColorMode::Monochrome);
+#ifndef TRETRO_NO_BIG_UI
+    big_mode = uiBigMode(w, h);
+#endif
     s_win_top = 0; s_win_bot = h;
 
     handleInput();
 
     if (anim_progress <= 0.0f) {
-        if (cfg.show_stats_overlay) renderStatsOverlay(w, h, 1.0f, mono);
-        if (cfg.show_log_overlay && m_transient_log_ttl > 0.0f) renderLogOverlay(w, h, 1.0f, mono);
-        if (cfg.show_bottom_bar) renderInGameBottomBar(w, h, 1.0f, mono);
+        if (cfg.show_stats_overlay) renderStatsOverlay(w, h, 1.0f);
+        if (cfg.show_log_overlay && m_transient_log_ttl > 0.0f) renderLogOverlay(1.0f);
+        if (cfg.show_bottom_bar) renderInGameBottomBar(w, h, 1.0f);
         return;
     }
 
@@ -1899,24 +1996,25 @@ void RetroUI::render(PodVector<PodVector<ConsoleCell>>& buffer, int w, int h) {
     float slide_factor = 1.0f - anim_progress;
     float ease_slide = slide_factor * slide_factor * slide_factor;
 
-    float ingame_factor = rt_clamp(1.0f - anim_progress * 2.0f, 0.0f, 1.0f);
+    float ingame_factor = fast_clamp(1.0f - anim_progress * 2.0f, 0.0f, 1.0f);
     float ease_ingame   = ingame_factor * ingame_factor * (3.0f - 2.0f * ingame_factor);
 
-    float menu_factor   = rt_clamp((anim_progress - 0.5f) * 2.0f, 0.0f, 1.0f);
+    float menu_factor   = fast_clamp((anim_progress - 0.5f) * 2.0f, 0.0f, 1.0f);
     float ease_menu     = menu_factor * menu_factor * (3.0f - 2.0f * menu_factor);
 
     handleNavigation();
-    renderBackground(w, h, mono);
+    renderBackground(w, h);
 
-    if (cfg.show_stats_overlay && ease_slide > 0.05f) renderStatsOverlay(w, h, ease_slide, mono);
-    if (cfg.show_log_overlay && m_transient_log_ttl > 0.0f) renderLogOverlay(w, h, ease_slide, mono);
+    if (cfg.show_stats_overlay && ease_slide > 0.05f) renderStatsOverlay(w, h, ease_slide);
+    if (cfg.show_log_overlay && m_transient_log_ttl > 0.0f) renderLogOverlay(ease_slide);
 
     int px, py, pw, ph;
     calculatePopupGeometry(w, h, anim, px, py, pw, ph);
+    m_last_visible = fast_max_t(1, (ph - 4) / getItemHeight());
 
     if (m_mouse_clicked) {
-        int top_h = big_mode ? 7 : 1;
-        int bot_h = big_mode ? 7 : 1;
+        int top_h = barH();
+        int bot_h = barH();
         bool in_top_bar = hitTest(0, (int)((anim - 1.f) * top_h), w, top_h);
         bool in_bot_bar = (ease_menu > 0.0f) && hitTest(0, h - bot_h + (int)((1.f - ease_menu) * bot_h + 0.5f), w, bot_h);
         if (!in_top_bar && !in_bot_bar && !hitTest(px, py, pw, ph)) {
@@ -1929,26 +2027,26 @@ void RetroUI::render(PodVector<PodVector<ConsoleCell>>& buffer, int w, int h) {
     drawShadow(px, py, pw, ph);
     fillRect(px, py, pw, ph, Colors::BG);
 
-    if      (browser.active)      renderBrowser(w, h, px, py, pw, ph, mono);
-    else if (core_picker.active)  renderCorePicker(w, h, px, py, pw, ph, mono);
-    else if (downloader.active)   renderDownloader(w, h, px, py, pw, ph, mono);
+    if      (browser.active)      renderBrowser(px, py, pw, ph);
+    else if (core_picker.active)  renderCorePicker(px, py, pw, ph);
+    else if (downloader.active)   renderDownloader(px, py, pw, ph);
     else switch (section) {
         case MenuSec::FILE_:    renderFileSection(px, py, pw, ph);                 break;
         case MenuSec::OPTIONS:  renderOptionsSection(px, py, pw, ph);              break;
         case MenuSec::GAME:     renderGameSection(px, py, pw, ph);                 break;
-        case MenuSec::CONSOLE:  renderConsoleSection(w, h, px, py, pw, ph, mono); break;
+        case MenuSec::CONSOLE:  renderConsoleSection(px, py, pw, ph); break;
         default: break;
     }
 
     s_win_top = 0; s_win_bot = h;
     last_item_count = menu.item_count;
 
-    renderTopBar(w, h, anim, mono);
+    renderTopBar(w, h, anim);
 
     if (cfg.show_bottom_bar && ease_ingame > 0.001f) {
-        renderInGameBottomBar(w, h, ease_ingame, mono);
+        renderInGameBottomBar(w, h, ease_ingame);
     }
     if (ease_menu > 0.001f) {
-        renderBottomBar(w, h, ease_menu, mono);
+        renderBottomBar(w, h, ease_menu);
     }
 }

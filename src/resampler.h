@@ -40,7 +40,7 @@ struct HermiteResampler {
         int d_rate = dst_rate > 0 ? dst_rate : 44100;
 
         if (s_rate == d_rate) {
-            int n = fast_min(in_frames, out_capacity);
+            int n = fast_min_t(in_frames, out_capacity);
             memcpy(out, in, (size_t)n * sizeof(int16_t) * 2);
             return n;
         }
@@ -86,4 +86,4 @@ struct HermiteResampler {
     }
 };
 
-#endif 
+#endif

@@ -280,19 +280,11 @@ void input_poll_cb(void) {
 static inline bool is_gp_input_down(const GamepadState& gp, int m) {
     if (!gp.connected || m < 0) return false;
     if (m < 16) return gp.buttons[m];
-    switch (m) {
-        case 16: return gp.leftY < -0.5f;   
-        case 17: return gp.leftY > 0.5f;    
-        case 18: return gp.leftX < -0.5f;   
-        case 19: return gp.leftX > 0.5f;    
-        case 20: return gp.rightY < -0.5f;  
-        case 21: return gp.rightY > 0.5f;   
-        case 22: return gp.rightX < -0.5f;  
-        case 23: return gp.rightX > 0.5f;   
-        case 24: return gp.leftTrigger > 0.5f;
-        case 25: return gp.rightTrigger > 0.5f;
-        default: return false;
-    }
+    if (m >= 26) return false;
+    float ax[6];
+    padAxes(gp, ax);
+    const float v = ax[kAxisOfBind[m - 16]];
+    return gpBindPositive(m) ? v > 0.5f : v < -0.5f;
 }
 
 static inline bool is_action_down(const Frontend& f, const GamepadState& gp, int bind_idx) {

@@ -5,11 +5,6 @@
 #define TRETRO_GPU_DOWNSCALE 1
 #endif
 
-static inline int fast_min(int a, int b) { return a < b ? a : b; }
-static inline int fast_max(int a, int b) { return a > b ? a : b; }
-static inline int fast_clamp(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
-
-static constexpr const char* const raw_shadow_ramp[5] = {" ", "\xe2\x96\x91", "\xe2\x96\x92", "\xe2\x96\x93", "\xe2\x96\x88"}; 
 static constexpr char raw_ascii_ramp[] = " .'`^\",:;Il!i~+_-?][}{1)(|\\/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$";
 static constexpr int ASCII_RAMP_SIZE = sizeof(raw_ascii_ramp) - 1;
 
@@ -247,7 +242,7 @@ static void blitRow(const BlitParams& p, int ty, ConsoleCell* row) {
         const uint8_t* row_bot = p.src + sy_bot * p.pitch;
 
         for (int tx = x_start; tx < x_end; ++tx) {
-            int sx = fast_min(static_cast<int>(sx_fp >> 16), p.max_sx);
+            int sx = fast_min_t(static_cast<int>(sx_fp >> 16), p.max_sx);
             sx_fp += p.scale_x;
 
             RGB t = {p.bezel.r, p.bezel.g, p.bezel.b};
@@ -258,7 +253,7 @@ static void blitRow(const BlitParams& p, int ty, ConsoleCell* row) {
             if (p.color_mode == 4) {
                 int lum = (calc_luma(t.r, t.g, t.b) + calc_luma(b.r, b.g, b.b)) >> 1;
                 int idx = fast_clamp((lum * 4 + 127) / 255, 0, 4);
-                set_glyph(row[tx], raw_shadow_ramp[idx], RGBColor(0,0,0), p.bezel);
+                set_glyph(row[tx], kShadowRamp[idx], RGBColor(0,0,0), p.bezel);
             } else {
                 set_half_block(row[tx], RGBColor(t.r, t.g, t.b), RGBColor(b.r, b.g, b.b));
             }
@@ -268,7 +263,7 @@ static void blitRow(const BlitParams& p, int ty, ConsoleCell* row) {
         const uint8_t* row_src = p.src + sy * p.pitch;
 
         for (int tx = x_start; tx < x_end; ++tx) {
-            int sx = fast_min(static_cast<int>(sx_fp >> 16), p.max_sx);
+            int sx = fast_min_t(static_cast<int>(sx_fp >> 16), p.max_sx);
             sx_fp += p.scale_x;
 
             RGB pxl = sample_pixel(p, row_src, sx, tx, ty);
@@ -293,11 +288,7 @@ static Layout computeLayout(unsigned src_w, unsigned src_h, int term_w, int term
     L.pixel_mode = g_cfg.pixel_mode;
     bool use_pixel_mode = L.pixel_mode;
 
-    int bar_h = 0;
-    if (g_cfg.show_bottom_bar) {
-        bool big_mode = (g_cfg.menu_scale == 0) ? (term_w >= 160 && term_h >= 50) : (g_cfg.menu_scale == 2);
-        bar_h = big_mode ? 7 : 1;
-    }
+    const int bar_h = g_cfg.show_bottom_bar ? uiBarH(uiBigMode(term_w, term_h)) : 0;
     int avail_h = (term_h > bar_h + 4) ? (term_h - bar_h) : term_h;
 
     int term_px_w = term_w;
@@ -331,8 +322,8 @@ static Layout computeLayout(unsigned src_w, unsigned src_h, int term_w, int term
         }
     }
 
-    L.fit_w = fast_max(1, fit_w);
-    L.fit_h = fast_max(1, fit_h);
+    L.fit_w = fast_max_t(1, fit_w);
+    L.fit_h = fast_max_t(1, fit_h);
     L.avail_h = avail_h;
     L.term_px_w = term_px_w;
     L.term_px_h = term_px_h;

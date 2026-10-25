@@ -330,7 +330,7 @@ CoreDownloadManager::~CoreDownloadManager() {
 }
 
 void CoreDownloadManager::resetDownloadStatus() {
-    if (!m_dl.active.load()) m_dl.progress.store(0.f);
+    if (!m_dl.active.load()) { m_dl.rx.store(0); m_dl.total.store(0); }
 }
 
 bool CoreDownloadManager::isCoreInstalled(const char* n) const {
@@ -464,6 +464,8 @@ bool CoreDownloadManager::httpDl(const char* host, const char* path,
     if (g_inet.HttpQueryInfoA(hUrl, HTTP_QUERY_CONTENT_LENGTH, cl_buf, &cl_buf_sz, NULL))
         cl = strtol(cl_buf, nullptr, 10);
 
+    if (update_progress) m_dl.total.store(cl > 0 ? (int)cl : 0);
+
     char* buf = static_cast<char*>(malloc(HTTP_BUFSZ));
     if (!buf) return false;
 
@@ -480,8 +482,7 @@ bool CoreDownloadManager::httpDl(const char* host, const char* path,
 
         if (fwrite(buf, 1, got, f) != got) { ok = false; break; }
         rx += got;
-        if (update_progress && cl > 0)
-            m_dl.progress.store(100.f * (float)rx / (float)cl);
+        if (update_progress) m_dl.rx.store((int)rx);
     }
     free(buf);
 
@@ -648,7 +649,8 @@ void CoreDownloadManager::startDownload(const CoreInfo& c) {
         m_dl.active.store(false);
         return;
     }
-    m_dl.progress.store(0.f);
+    m_dl.rx.store(0);
+    m_dl.total.store(0);
     {
         LockGuard lg(*m_dl.meta_mtx);
         safeCopy(m_dl.name, c.name, NAME_SZ);
@@ -675,13 +677,12 @@ void CoreDownloadManager::dlThread() {
 
     bool ok = false;
     for (int attempt = 0; attempt < 3 && !ok; ++attempt) {
-        m_dl.progress.store(0.f);
+        m_dl.rx.store(0);
         ok = httpDl(HOST, url, zip, true);
     }
     if (ok) unzip(zip, g_cores_dir, local_name);
     remove(zip);
 
-    m_dl.progress.store(100.f);
     m_dl.active.store(false);
 }
 

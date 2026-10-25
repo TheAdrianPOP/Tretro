@@ -158,8 +158,7 @@ void gameCfgLoad(const char* save_dir, const char* content_path, const char* cor
     AppSettings& c = get_cfg();
     Frontend& fe   = Frontend::get();
 
-    memcpy(c.key_mappings, c.default_key_mappings, sizeof(c.key_mappings));
-    memcpy(c.gamepad_mappings, c.default_gamepad_mappings, sizeof(c.gamepad_mappings));
+    c.resetBindings();
     c.mouse_sensitivity = c.default_mouse_sensitivity;
     fe.game_options.clear();
 
