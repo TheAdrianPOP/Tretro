@@ -80,15 +80,13 @@ target("Tretro")
             "-fno-exceptions",
             "-fno-stack-protector",
             "-fno-ipa-cp",
+            "-fno-ipa-sra",
             "-fno-partial-inlining",
             "-fmerge-all-constants",
-            "-fvisibility=hidden",
-            "-fvisibility-inlines-hidden",
             "-fno-threadsafe-statics",
             "-mno-stack-arg-probe",
             "-fno-use-cxa-atexit",
-            "-fno-plt",
-            "-fipa-pta"
+            "-fno-plt"
         }
 
         if has_config("lto") then
@@ -203,7 +201,6 @@ target("Tretro")
             "-Wl,-Bdynamic",
             "-Wl,--gc-sections",
             "-Wl,-O1",
-            "-Wl,--disable-reloc-section",
             "-Wl,--build-id=none",
             "-Wl,--no-insert-timestamp",
             "-Wl,--disable-auto-import",
@@ -216,6 +213,11 @@ target("Tretro")
         if not has_config("mem_analyze") then
             table.insert(win_ldflags, "-Wl,--exclude-all-symbols")
             table.insert(win_ldflags, "-s")
+        end
+
+        if has_config("lto") then
+            table.insert(win_ldflags, "-flto")
+            table.insert(win_ldflags, "-flto-partition=none")
         end
 
         add_ldflags(win_ldflags, {force = true})
@@ -243,7 +245,17 @@ target("Tretro")
             local packer = find_tool_script("packer.py")
             if python and packer then
                 print("Packing executable with custom packer (" .. packer .. ")...")
-                os.execv(python.program, {packer, target:targetfile()})
+                local args = {packer, target:targetfile()}
+                local rc = path.join(os.projectdir(), "res", "icon.rc")
+                local ico = path.join(os.projectdir(), "res", "icon.ico")
+                if os.isfile(rc) then
+                    table.insert(args, "--icon")
+                    table.insert(args, rc)
+                elseif os.isfile(ico) then
+                    table.insert(args, "--icon")
+                    table.insert(args, ico)
+                end
+                os.execv(python.program, args)
             else
                 print("Warning: Packer not found or python missing.")
             end
