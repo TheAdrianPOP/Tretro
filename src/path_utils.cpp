@@ -328,8 +328,11 @@ void getSlotPath(char* buf, size_t sz, const char* save_dir, const char* content
     getPathStem(core_path, core_stem, sizeof(core_stem));
     getPathStem(content_path, content_stem, sizeof(content_stem));
 
-    if (content_stem[0] != '\0') {
+    if (content_stem[0] != '\0' && core_stem[0] != '\0') {
         snprintf(buf, sz, "%s/%s.%s.state%d", save_dir, content_stem, core_stem, slot);
+    } else if (content_stem[0] != '\0') {
+        // content with no core: avoids a literal "content..stateN" double-dot.
+        snprintf(buf, sz, "%s/%s.state%d", save_dir, content_stem, slot);
     } else if (core_stem[0] != '\0') {
         snprintf(buf, sz, "%s/%s.state%d", save_dir, core_stem, slot);
     } else {
@@ -369,7 +372,7 @@ bool getFileModTime(const char* path, char* out_buf, size_t out_sz) {
 
 bool getMetaPaths(const char* state_path, char* core_out, size_t core_sz, char* content_out, size_t content_sz) {
     char meta_path[MAX_PATH];
-    snprintf(meta_path, sizeof(meta_path), "%s.meta", state_path);
+    snprintf(meta_path, sizeof(meta_path), kMetaSuffixFmt, state_path);
     FILE* f = fopen(meta_path, "r");
     if (!f) return false;
 
@@ -488,14 +491,14 @@ bool getSramPath(char* buf, size_t sz, const char* save_dir, const char* content
     getPathStem(core_path, core_stem, sizeof(core_stem));
     getPathStem(content_path, content_stem, sizeof(content_stem));
 
-    const char* dir = (save_dir && save_dir[0]) ? save_dir : "./saves";
+    const char* dir = (save_dir && save_dir[0]) ? save_dir : kDefaultSaveDir;
 
     if (content_stem[0] != '\0' && core_stem[0] != '\0') {
         snprintf(buf, sz, "%s/%s.%s.srm", dir, content_stem, core_stem);
     } else if (content_stem[0] != '\0') {
-        snprintf(buf, sz, "%s/%s.srm", dir, content_stem);
+        snprintf(buf, sz, kSramFmt, dir, content_stem);
     } else if (core_stem[0] != '\0') {
-        snprintf(buf, sz, "%s/%s.srm", dir, core_stem);
+        snprintf(buf, sz, kSramFmt, dir, core_stem);
     } else {
         return false;
     }

@@ -108,6 +108,18 @@ size_t audio_sample_batch_cb(const int16_t* data, size_t frames) {
         int chunk_in = (int)(frames - in_cursor);
         if (chunk_in > 1024) chunk_in = 1024;
 
+        // At a steep upsampling ratio (slow/throttled core -> higher output rate),
+        // 1024 input frames can need far more than kMaxBatchOut output frames.
+        // process() stops once it hits that cap, having consumed only part of the
+        // chunk -- but this loop always advances in_cursor by the full chunk_in,
+        // which would silently drop whatever was left unconsumed. Shrink chunk_in
+        // so it can never ask for more output than kMaxBatchOut can hold.
+        if (f.resampler.src_rate < f.resampler.dst_rate) {
+            int64_t max_in = ((int64_t)kMaxBatchOut * f.resampler.src_rate) / f.resampler.dst_rate;
+            if (max_in < 1) max_in = 1;
+            if (chunk_in > max_in) chunk_in = (int)max_in;
+        }
+
         int out_frames = f.resampler.process(
             data + (in_cursor * 2), chunk_in,
             resampled, kMaxBatchOut

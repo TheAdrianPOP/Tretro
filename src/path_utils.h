@@ -13,6 +13,13 @@
 #define MAX_PATH 260
 #endif
 
+// Shared default/format strings, kept in one place so every file that needs
+// them references the same symbol instead of each carrying its own literal.
+inline constexpr const char* const kDefaultSaveDir   = "./saves";
+inline constexpr const char* const kDefaultSystemDir = "./system";
+inline constexpr const char* const kMetaSuffixFmt    = "%s.meta";
+inline constexpr const char* const kSramFmt          = "%s/%s.srm";
+
 struct DetectedSave {
     char path[MAX_PATH];
     char time_buf[64];

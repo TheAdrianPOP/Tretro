@@ -468,8 +468,9 @@ static void cycle_core_var(CoreVar& cv, bool next) {
     if (cv.raw.empty()) return;
     const char* cur = !cv.current.empty() ? cv.current.c_str() : cv.def.c_str();
 
-    StrToken tokens[32];
-    int count = splitPipes(cv.raw.c_str(), tokens, 32);
+    // 128 matches RETRO_NUM_CORE_OPTION_VALUES_MAX -- the real libretro option-value limit.
+    StrToken tokens[128];
+    int count = splitPipes(cv.raw.c_str(), tokens, 128);
     if (count <= 1) return;
 
     int cur_idx = 0, cur_len = (int)strlen(cur);
@@ -518,9 +519,9 @@ static void getCoreOptionDisplay(const CoreVar& cv, char* out_lbl, size_t lbl_sz
     bool found_label = false;
 
     if (!cv.raw_labels.empty()) {
-        StrToken raw_toks[32], lbl_toks[32];
-        int r_count = splitPipes(cv.raw.c_str(), raw_toks, 32);
-        int l_count = splitPipes(cv.raw_labels.c_str(), lbl_toks, 32);
+        StrToken raw_toks[128], lbl_toks[128];
+        int r_count = splitPipes(cv.raw.c_str(), raw_toks, 128);
+        int l_count = splitPipes(cv.raw_labels.c_str(), lbl_toks, 128);
         int cur_len = (int)strlen(cur), limit = fast_min_t(r_count, l_count);
         for (int i = 0; i < limit; ++i) {
             if (raw_toks[i].len == cur_len && memcmp(raw_toks[i].p, cur, cur_len) == 0) {
@@ -1742,7 +1743,7 @@ UI_NOINLINE void RetroUI::renderGameSection(int px, int py, int pw, int ph) {
                 else if (act == 3) f.saveState(path);
                 else if (act == 4) {
                     remove(path);
-                    char meta[520]; snprintf(meta, sizeof(meta), "%s.meta", path);
+                    char meta[520]; snprintf(meta, sizeof(meta), kMetaSuffixFmt, path);
                     remove(meta);
                 }
                 static const char* const kSlotLogs[] = { "Loaded", "Saved", "Deleted" };

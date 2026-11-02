@@ -142,8 +142,8 @@ Frontend::Frontend()
     : threads(0)
     , audio_ring(16384)
 {
-    system_dir = "./system";
-    save_dir   = "./saves";
+    system_dir = kDefaultSystemDir;
+    save_dir   = kDefaultSaveDir;
 }
 
 void Frontend::logMessageV(const char* fmt, va_list args) {
@@ -622,8 +622,8 @@ bool Frontend::init(const char* cp,
 {
     core_path    = cp;
     content_path = content ? content : "";
-    system_dir   = system_dir_ ? system_dir_ : "./system";
-    save_dir     = save_dir_   ? save_dir_   : "./saves";
+    system_dir   = system_dir_ ? system_dir_ : kDefaultSystemDir;
+    save_dir     = save_dir_   ? save_dir_   : kDefaultSaveDir;
 
     createDirRecursive(system_dir.c_str());
     createDirRecursive(save_dir.c_str());
@@ -734,7 +734,7 @@ bool Frontend::saveState(const char* path) {
     }
 
     char meta_path[512];
-    snprintf(meta_path, sizeof(meta_path), "%s.meta", path);
+    snprintf(meta_path, sizeof(meta_path), kMetaSuffixFmt, path);
     FILE* fmeta = fopen(meta_path, "w");
     if (fmeta) {
         char abs_core[512] = "";
@@ -854,7 +854,7 @@ bool Frontend::loadSRAM(const char* custom_path) {
                 cstem[l] = '\0';
 
                 char alt[512];
-                snprintf(alt, sizeof(alt), "%s/%s.srm", save_dir.c_str(), cstem);
+                snprintf(alt, sizeof(alt), kSramFmt, save_dir.c_str(), cstem);
                 if (fileExists(alt)) {
                     snprintf(path, sizeof(path), "%s", alt);
                 } else {

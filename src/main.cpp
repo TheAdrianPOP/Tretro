@@ -91,8 +91,8 @@ struct ParsedArgs {
 };
 
 NOINLINE_COLD static bool parseArgs(int argc, char* argv[], ParsedArgs& a) {
-    safeCopy(a.system_dir, "./system", sizeof(a.system_dir));
-    safeCopy(a.save_dir,   "./saves",  sizeof(a.save_dir));
+    safeCopy(a.system_dir, kDefaultSystemDir, sizeof(a.system_dir));
+    safeCopy(a.save_dir,   kDefaultSaveDir,  sizeof(a.save_dir));
 
     char path_buf[512];
 

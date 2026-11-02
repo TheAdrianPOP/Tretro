@@ -110,9 +110,9 @@ bool getGameConfigPath(char* out, size_t sz, const char* save_dir, const char* c
     getPathStem(content_path, g_stem, sizeof(g_stem));
 
     if (g_stem[0] && c_stem[0]) {
-        snprintf(out, sz, "%s/%s.%s.cfg", save_dir ? save_dir : "./saves", g_stem, c_stem);
+        snprintf(out, sz, "%s/%s.%s.cfg", save_dir ? save_dir : kDefaultSaveDir, g_stem, c_stem);
     } else if (c_stem[0]) {
-        snprintf(out, sz, "%s/%s.cfg", save_dir ? save_dir : "./saves", c_stem);
+        snprintf(out, sz, "%s/%s.cfg", save_dir ? save_dir : kDefaultSaveDir, c_stem);
     } else {
         return false;
     }
@@ -120,7 +120,7 @@ bool getGameConfigPath(char* out, size_t sz, const char* save_dir, const char* c
 }
 
 void gameCfgSave(const char* save_dir, const char* content_path, const char* core_path) {
-    char path[260];
+    char path[512]; // matches content_path/core_path elsewhere; 260 risked truncating long filenames
     if (!getGameConfigPath(path, sizeof(path), save_dir, content_path, core_path)) return;
 
     FILE* f = fopen(path, "wb");
@@ -162,7 +162,7 @@ void gameCfgLoad(const char* save_dir, const char* content_path, const char* cor
     c.mouse_sensitivity = c.default_mouse_sensitivity;
     fe.game_options.clear();
 
-    char path[260];
+    char path[512]; // matches content_path/core_path elsewhere; 260 risked truncating long filenames
     if (!getGameConfigPath(path, sizeof(path), save_dir, content_path, core_path)) return;
 
     FILE* f = fopen(path, "rb");
