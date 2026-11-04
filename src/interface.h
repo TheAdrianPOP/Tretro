@@ -106,15 +106,10 @@ inline constexpr uint8_t kAxisOfBind[10] = { 1, 1, 0, 0, 3, 3, 2, 2, 4, 5 };   /
 inline constexpr bool gpBindPositive(int id) { return (id & 1) || id >= 24; }  // else negative direction
 
 // Big menu mode (3x5 bitmap font). Auto picks it on large terminals.
-// Build with -DTRETRO_NO_BIG_UI to compile it out entirely.
-#ifdef TRETRO_NO_BIG_UI
-inline constexpr bool uiBigMode(int, int) { return false; }
-#else
 inline bool uiBigMode(int w, int h) {
     const int s = get_cfg().menu_scale;
     return s == 0 ? (w >= 160 && h >= 50) : (s == 2);
 }
-#endif
 inline constexpr int uiBarH(bool big) { return big ? 7 : 1; }
 
 enum class MenuSec { FILE_, OPTIONS, GAME, CONSOLE };
@@ -243,11 +238,7 @@ public:
     bool m_is_gamepad_mode         = false;
 
     bool is_mono  = false;
-#ifdef TRETRO_NO_BIG_UI
-    static constexpr bool big_mode = false;
-#else
     bool big_mode = false;
-#endif
     float fps_display_value = 0.0f;
     const InputManager* input_ptr = nullptr;
     BorderStyle border_style;

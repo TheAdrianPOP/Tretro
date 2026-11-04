@@ -13,8 +13,6 @@
 #define MAX_PATH 260
 #endif
 
-// Shared default/format strings, kept in one place so every file that needs
-// them references the same symbol instead of each carrying its own literal.
 inline constexpr const char* const kDefaultSaveDir   = "./saves";
 inline constexpr const char* const kDefaultSystemDir = "./system";
 inline constexpr const char* const kMetaSuffixFmt    = "%s.meta";
@@ -45,6 +43,8 @@ bool pathExists(const char* path);
 bool isCoreExt(const char* lext);
 
 bool extractFirstValidPath(const char* raw, size_t raw_len, char* out_path, size_t out_sz);
+bool buildStemPath(char* buf, size_t sz, const char* dir, const char* content_path,
+                   const char* core_path, const char* suffix, bool need_core = false);
 void getSlotPath(char* buf, size_t sz, const char* save_dir, const char* content_path, const char* core_path, int slot);
 bool getSramPath(char* buf, size_t sz, const char* save_dir, const char* content_path, const char* core_path);
 bool getFileModTime(const char* path, char* out_buf, size_t out_sz);

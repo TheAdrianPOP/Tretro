@@ -120,6 +120,18 @@ void tretro_log(const char* fmt, ...) {
     va_end(args);
 }
 
+static void resolveDir(DynString& dir, const char* fallback) {
+    char in[512], abs_buf[512];
+    safeCopy(in, (dir.empty() ? fallback : dir.c_str()), sizeof(in));
+    makePathAbsolute(in, abs_buf, sizeof(abs_buf));
+
+    size_t len = strlen(abs_buf);
+    for (size_t i = 0; i < len; ++i) if (abs_buf[i] == '\\') abs_buf[i] = '/';
+    while (len > 3 && abs_buf[len - 1] == '/') abs_buf[--len] = '\0';   // keep "C:/"
+
+    dir = abs_buf;
+}
+
 static void retro_log_impl(retro_log_level level, const char* fmt, ...) {
     static const char* const prefix[] = {"[dbg]", "[inf]", "[wrn]", "[ERR]"};
     const int idx = (level >= 0 && level <= 3) ? (int)level : 3;
@@ -570,12 +582,38 @@ static void handleKeyCallback(bool down, int key_code, uint32_t character, void*
     keyboard_callback_handler(down, key_code, character);
 }
 
+static void ensureSystemSubdir(Frontend& f, const char* rel) {
+    if (!rel || !rel[0]) return;
+    char full[512];
+    snprintf(full, sizeof(full), "%s/%s", f.system_dir.c_str(), rel);
+    for (char* p = full; *p; ++p) if (*p == '\\') *p = '/';
+    createDirRecursive(full);
+}
+
 static void checkFirmware(Frontend& f, const char* cp) {
     CoreInfoFirmware fw{};
-    if (!parseFirmwareFromInfo(cp, &fw) || fw.count <= 0) return;
+    const bool has_fw = parseFirmwareFromInfo(cp, &fw) && fw.count > 0;
+
+    if (!has_fw) {
+        // No firmware list: fall back to system/<core name>.
+        char stem[128];
+        getPathStem(cp, stem, sizeof(stem));
+        size_t l = strlen(stem);
+        if (l > 9 && !strcmp(stem + l - 9, "_libretro")) stem[l - 9] = '\0';
+        if (stem[0]) ensureSystemSubdir(f, stem);
+        return;
+    }
 
     int missing_req = 0, missing_opt = 0;
     for (int i = 0; i < fw.count; i++) {
+        char dir[128];
+        safeCopy(dir, fw.entries[i].path, sizeof(dir));
+        for (char* c = dir; *c; ++c) if (*c == '\\') *c = '/';
+        if (char* slash = strrchr(dir, '/')) {
+            *slash = '\0';
+            ensureSystemSubdir(f, dir);
+        }
+
         char full_path[512];
         snprintf(full_path, sizeof(full_path), "%s/%s", f.system_dir.c_str(), fw.entries[i].path);
         if (!pathExists(full_path)) {
@@ -624,6 +662,9 @@ bool Frontend::init(const char* cp,
     content_path = content ? content : "";
     system_dir   = system_dir_ ? system_dir_ : kDefaultSystemDir;
     save_dir     = save_dir_   ? save_dir_   : kDefaultSaveDir;
+
+    resolveDir(system_dir, kDefaultSystemDir);
+    resolveDir(save_dir,   kDefaultSaveDir);
 
     createDirRecursive(system_dir.c_str());
     createDirRecursive(save_dir.c_str());
@@ -781,18 +822,21 @@ static void rtcPath(const char* srm, char* out, size_t sz) {
     snprintf(out + pos, sz - pos, ".rtc");
 }
 
+struct SramRegions { void* sram; size_t sram_n; void* rtc; size_t rtc_n; };
+
+static bool getSramRegions(Frontend& f, SramRegions& r) {
+    if (!f.core.loaded() || !f.core.get_memory_data || !f.core.get_memory_size) return false;
+    r.sram   = f.core.get_memory_data(RETRO_MEMORY_SAVE_RAM);
+    r.sram_n = f.core.get_memory_size(RETRO_MEMORY_SAVE_RAM);
+    if (!r.sram) r.sram_n = 0;
+    r.rtc    = f.core.get_memory_data(RETRO_MEMORY_RTC);
+    r.rtc_n  = r.rtc ? f.core.get_memory_size(RETRO_MEMORY_RTC) : 0;
+    return r.sram_n > 0 || r.rtc_n > 0;
+}
+
 bool Frontend::saveSRAM(const char* custom_path) {
-    if (!core.loaded() || !core.get_memory_data || !core.get_memory_size) return false;
-
-    void* sram_data = core.get_memory_data(RETRO_MEMORY_SAVE_RAM);
-    size_t sram_size = core.get_memory_size(RETRO_MEMORY_SAVE_RAM);
-
-    void* rtc_data = core.get_memory_data(RETRO_MEMORY_RTC);
-    size_t rtc_size = rtc_data ? core.get_memory_size(RETRO_MEMORY_RTC) : 0;
-
-    if ((!sram_data || sram_size == 0) && (!rtc_data || rtc_size == 0)) {
-        return false;
-    }
+    SramRegions r;
+    if (!getSramRegions(*this, r)) return false;
 
     char path[512];
     if (custom_path && custom_path[0]) {
@@ -800,41 +844,28 @@ bool Frontend::saveSRAM(const char* custom_path) {
     } else if (!getSramPath(path, sizeof(path), save_dir.c_str(), content_path.c_str(), core_path.c_str())) {
         return false;
     }
+    char rtc[512];
+    rtcPath(path, rtc, sizeof(rtc));
 
     bool ok = true;
-    if (sram_data && sram_size > 0) {
-        if (FS::writeBytes(path, (const uint8_t*)sram_data, sram_size)) {
-            logMessage("[inf] [sram] Saved %zu B SRAM -> %s", sram_size, path);
-        } else {
-            logMessage("[ERR] [sram] Failed writing SRAM to %s", path);
+    for (int i = 0; i < 2; ++i) {
+        const void*  src = i ? r.rtc : r.sram;
+        const size_t n   = i ? r.rtc_n : r.sram_n;
+        const char*  p   = i ? rtc : path;
+        if (!n) continue;
+        if (FS::writeBytes(p, (const uint8_t*)src, n)) {
+            logMessage("[inf] [sram] Saved %zu B %s -> %s", n, i ? "RTC" : "SRAM", p);
+        } else if (!i) {
+            logMessage("[ERR] [sram] Failed writing SRAM to %s", p);
             ok = false;
         }
     }
-
-    if (rtc_data && rtc_size > 0) {
-        char rtc_path[512];
-        rtcPath(path, rtc_path, sizeof(rtc_path));
-
-        if (FS::writeBytes(rtc_path, (const uint8_t*)rtc_data, rtc_size)) {
-            logMessage("[inf] [sram] Saved %zu B RTC -> %s", rtc_size, rtc_path);
-        }
-    }
-
     return ok;
 }
 
 bool Frontend::loadSRAM(const char* custom_path) {
-    if (!core.loaded() || !core.get_memory_data || !core.get_memory_size) return false;
-
-    void* sram_data = core.get_memory_data(RETRO_MEMORY_SAVE_RAM);
-    size_t sram_size = core.get_memory_size(RETRO_MEMORY_SAVE_RAM);
-
-    void* rtc_data = core.get_memory_data(RETRO_MEMORY_RTC);
-    size_t rtc_size = rtc_data ? core.get_memory_size(RETRO_MEMORY_RTC) : 0;
-
-    if ((!sram_data || sram_size == 0) && (!rtc_data || rtc_size == 0)) {
-        return false;
-    }
+    SramRegions r;
+    if (!getSramRegions(*this, r)) return false;
 
     char path[512];
     if (custom_path && custom_path[0]) {
@@ -859,40 +890,27 @@ bool Frontend::loadSRAM(const char* custom_path) {
                     snprintf(path, sizeof(path), "%s", alt);
                 } else {
                     snprintf(alt, sizeof(alt), "%s/%s.sav", save_dir.c_str(), cstem);
-                    if (fileExists(alt)) {
-                        snprintf(path, sizeof(path), "%s", alt);
-                    }
+                    if (fileExists(alt)) snprintf(path, sizeof(path), "%s", alt);
                 }
             }
         }
     }
+    char rtc[512];
+    rtcPath(path, rtc, sizeof(rtc));
 
     bool loaded_any = false;
-    if (sram_data && sram_size > 0 && fileExists(path)) {
-        auto buf = FS::readBytes(path);
-        if (!buf.empty()) {
-            size_t to_copy = (buf.size() < sram_size) ? buf.size() : sram_size;
-            memcpy(sram_data, buf.data(), to_copy);
-            logMessage("[inf] [sram] Loaded %zu B SRAM <- %s", to_copy, path);
-            loaded_any = true;
-        }
+    for (int i = 0; i < 2; ++i) {
+        void*        dst = i ? r.rtc : r.sram;
+        const size_t n   = i ? r.rtc_n : r.sram_n;
+        const char*  p   = i ? rtc : path;
+        if (!n || !fileExists(p)) continue;
+        auto buf = FS::readBytes(p);
+        if (buf.empty()) continue;
+        const size_t c = buf.size() < n ? buf.size() : n;
+        memcpy(dst, buf.data(), c);
+        logMessage("[inf] [sram] Loaded %zu B %s <- %s", c, i ? "RTC" : "SRAM", p);
+        loaded_any = true;
     }
-
-    if (rtc_data && rtc_size > 0) {
-        char rtc_path[512];
-        rtcPath(path, rtc_path, sizeof(rtc_path));
-
-        if (fileExists(rtc_path)) {
-            auto rtc_buf = FS::readBytes(rtc_path);
-            if (!rtc_buf.empty()) {
-                size_t to_copy = (rtc_buf.size() < rtc_size) ? rtc_buf.size() : rtc_size;
-                memcpy(rtc_data, rtc_buf.data(), to_copy);
-                logMessage("[inf] [sram] Loaded %zu B RTC <- %s", to_copy, rtc_path);
-                loaded_any = true;
-            }
-        }
-    }
-
     return loaded_any;
 }
 

@@ -10,6 +10,7 @@
 #define strcasecmp _stricmp
 #define strncasecmp _strnicmp
 #endif
+
 StdRedirector::StdRedirector() {
     hOrigStdout = GetStdHandle(STD_OUTPUT_HANDLE);
     hOrigStderr = GetStdHandle(STD_ERROR_HANDLE);
@@ -90,6 +91,7 @@ void getPathStem(const char* path, char* out_buf, size_t out_sz) {
     const char* base = getPathFilename(path);
     if (!base) return;
     const char* dot = strrchr(base, '.');
+    size_len_t:
     size_t len = dot ? (size_t)(dot - base) : strlen(base);
     if (len >= out_sz) len = out_sz - 1;
     memcpy(out_buf, base, len);
@@ -322,22 +324,25 @@ bool extractFirstValidPath(const char* raw, size_t raw_len, char* out_path, size
     return false;
 }
 
-void getSlotPath(char* buf, size_t sz, const char* save_dir, const char* content_path, const char* core_path, int slot) {
-    char core_stem[128];
-    char content_stem[128];
-    getPathStem(core_path, core_stem, sizeof(core_stem));
-    getPathStem(content_path, content_stem, sizeof(content_stem));
+bool buildStemPath(char* buf, size_t sz, const char* dir, const char* content_path,
+                   const char* core_path, const char* suffix, bool need_core) {
+    if (!buf || sz == 0) return false;
+    buf[0] = '\0';
+    char cs[128] = "", gs[128] = "";
+    getPathStem(core_path, cs, sizeof(cs));
+    getPathStem(content_path, gs, sizeof(gs));
+    if (need_core && !cs[0]) return false;
+    if (gs[0] && cs[0])      snprintf(buf, sz, "%s/%s.%s%s", dir, gs, cs, suffix);
+    else if (gs[0] || cs[0]) snprintf(buf, sz, "%s/%s%s", dir, gs[0] ? gs : cs, suffix);
+    else return false;
+    return true;
+}
 
-    if (content_stem[0] != '\0' && core_stem[0] != '\0') {
-        snprintf(buf, sz, "%s/%s.%s.state%d", save_dir, content_stem, core_stem, slot);
-    } else if (content_stem[0] != '\0') {
-        // content with no core: avoids a literal "content..stateN" double-dot.
-        snprintf(buf, sz, "%s/%s.state%d", save_dir, content_stem, slot);
-    } else if (core_stem[0] != '\0') {
-        snprintf(buf, sz, "%s/%s.state%d", save_dir, core_stem, slot);
-    } else {
+void getSlotPath(char* buf, size_t sz, const char* save_dir, const char* content_path, const char* core_path, int slot) {
+    char sfx[24];
+    snprintf(sfx, sizeof(sfx), ".state%d", slot);
+    if (!buildStemPath(buf, sz, save_dir, content_path, core_path, sfx))
         snprintf(buf, sz, "%s/state_%d.sav", save_dir, slot);
-    }
 }
 
 bool getFileModTime(const char* path, char* out_buf, size_t out_sz) {
@@ -483,26 +488,8 @@ void scanSaveStates(const char* save_dir, const char* content_path, const char* 
 }
 
 bool getSramPath(char* buf, size_t sz, const char* save_dir, const char* content_path, const char* core_path) {
-    if (!buf || sz == 0) return false;
-    buf[0] = '\0';
-
-    char core_stem[128] = "";
-    char content_stem[128] = "";
-    getPathStem(core_path, core_stem, sizeof(core_stem));
-    getPathStem(content_path, content_stem, sizeof(content_stem));
-
-    const char* dir = (save_dir && save_dir[0]) ? save_dir : kDefaultSaveDir;
-
-    if (content_stem[0] != '\0' && core_stem[0] != '\0') {
-        snprintf(buf, sz, "%s/%s.%s.srm", dir, content_stem, core_stem);
-    } else if (content_stem[0] != '\0') {
-        snprintf(buf, sz, kSramFmt, dir, content_stem);
-    } else if (core_stem[0] != '\0') {
-        snprintf(buf, sz, kSramFmt, dir, core_stem);
-    } else {
-        return false;
-    }
-    return true;
+    return buildStemPath(buf, sz, (save_dir && save_dir[0]) ? save_dir : kDefaultSaveDir,
+                         content_path, core_path, ".srm");
 }
 
 void getLatestSaveState(char* out_path, size_t sz, const char* save_dir, const char* content_path, const char* core_path) {

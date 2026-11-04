@@ -86,7 +86,11 @@ target("Tretro")
             "-fno-threadsafe-statics",
             "-mno-stack-arg-probe",
             "-fno-use-cxa-atexit",
-            "-fno-plt"
+            "-fno-plt",
+            "-falign-functions=1",
+            "-falign-jumps=1",
+            "-falign-loops=1",
+            "-falign-labels=1"
         }
 
         if has_config("lto") then
@@ -204,8 +208,7 @@ target("Tretro")
             "-Wl,--build-id=none",
             "-Wl,--no-insert-timestamp",
             "-Wl,--disable-auto-import",
-            "-Wl,--dynamicbase",
-            "-Wl,--high-entropy-va",
+            "-Wl,--disable-reloc-section",
             "-Wl,--nxcompat",
             "-Wl,--allow-multiple-definition"
         }

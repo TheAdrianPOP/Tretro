@@ -426,14 +426,20 @@ static HINTERNET open_url(AutoInet& session, const char* host, const char* path)
                                    INTERNET_FLAG_RELOAD | INTERNET_FLAG_SECURE, 0);
 }
 
+// Opens a WinINet session and URL into the caller's guards, which close them in reverse order.
+static bool openUrlSession(AutoInet& session, AutoInet& url, const char* host, const char* path) {
+    if (!inet_ready()) return false;
+    session.h = g_inet.InternetOpenA("CoreDownloader", INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
+    if (!session.h) return false;
+    url.h = open_url(session, host, path);
+    return url.h != nullptr;
+}
+
 bool CoreDownloadManager::httpGet(const char* host, const char* path,
                                    char* body, size_t cap, size_t& len) {
     len = 0;
-    if (!inet_ready()) return false;
-    AutoInet hSession(g_inet.InternetOpenA("CoreDownloader", INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0));
-    if (!hSession) return false;
-    AutoInet hUrl(open_url(hSession, host, path));
-    if (!hUrl) return false;
+    AutoInet hSession(nullptr), hUrl(nullptr);
+    if (!openUrlSession(hSession, hUrl, host, path)) return false;
 
     DWORD got = 0;
     while (len + 1 < cap) {
@@ -446,12 +452,8 @@ bool CoreDownloadManager::httpGet(const char* host, const char* path,
 
 bool CoreDownloadManager::httpDl(const char* host, const char* path,
                                   const char* dest, bool update_progress) {
-    if (!inet_ready()) return false;
-
-    AutoInet hSession(g_inet.InternetOpenA("CoreDownloader", INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0));
-    if (!hSession) return false;
-    AutoInet hUrl(open_url(hSession, host, path));
-    if (!hUrl) return false;
+    AutoInet hSession(nullptr), hUrl(nullptr);
+    if (!openUrlSession(hSession, hUrl, host, path)) return false;
 
     DWORD status = 0, status_sz = sizeof(status);
     if (!g_inet.HttpQueryInfoA(hUrl, HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER,

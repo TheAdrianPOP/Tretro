@@ -468,7 +468,6 @@ static void cycle_core_var(CoreVar& cv, bool next) {
     if (cv.raw.empty()) return;
     const char* cur = !cv.current.empty() ? cv.current.c_str() : cv.def.c_str();
 
-    // 128 matches RETRO_NUM_CORE_OPTION_VALUES_MAX -- the real libretro option-value limit.
     StrToken tokens[128];
     int count = splitPipes(cv.raw.c_str(), tokens, 128);
     if (count <= 1) return;
@@ -1979,9 +1978,7 @@ void RetroUI::render(PodVector<PodVector<ConsoleCell>>& buffer, int w, int h) {
     }
 
     is_mono = (cfg.color_mode == ColorMode::Monochrome);
-#ifndef TRETRO_NO_BIG_UI
     big_mode = uiBigMode(w, h);
-#endif
     s_win_top = 0; s_win_bot = h;
 
     handleInput();

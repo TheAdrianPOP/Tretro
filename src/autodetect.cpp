@@ -47,47 +47,65 @@ static FILE* open_info_file(const char* core_path) {
     return f;
 }
 
+typedef void (*InfoLineFn)(const char* key, const char* val, void* ud);
+
+// Reads the already-open .info file line by line and closes it.
+static void scanInfo(FILE* f, InfoLineFn fn, void* ud) {
+    char line[512], *k, *v;
+    while (fgets(line, sizeof(line), f)) {
+        if (parseInfoLine(line, &k, &v)) fn(k, v, ud);
+    }
+    fclose(f);
+}
+
+struct FwScan { CoreInfoFirmware* out; int expected; };
+
+static void fwLine(const char* k, const char* v, void* ud) {
+    FwScan* s = static_cast<FwScan*>(ud);
+    if (strcmp(k, "firmware_count") == 0) { s->expected = atoi(v); return; }
+    if (strncmp(k, "firmware", 8) != 0) return;
+
+    k += 8;
+    if (*k < '0' || *k > '9') return;
+    int idx = 0;
+    while (*k >= '0' && *k <= '9') idx = idx * 10 + (*k++ - '0');
+    if (idx >= kMaxCoreFirmware) return;
+
+    auto& entry = s->out->entries[idx];
+    if (strcmp(k, "_path") == 0) {
+        safeCopy(entry.path, v, sizeof(entry.path));
+        if (idx >= s->out->count) s->out->count = idx + 1;
+    } else if (strcmp(k, "_desc") == 0) {
+        safeCopy(entry.desc, v, sizeof(entry.desc));
+    } else if (strcmp(k, "_opt") == 0) {
+        entry.optional = (v[0] == 't' || v[0] == '1');
+    }
+}
+
 bool parseFirmwareFromInfo(const char* core_path, CoreInfoFirmware* out) {
     if (!out) return false;
     FILE* f = open_info_file(core_path);
     if (!f) return false;
 
     memset(out, 0, sizeof(*out));
-    int expected_count = -1;
-    char line[512], *k, *v;
+    FwScan s{ out, -1 };
+    scanInfo(f, fwLine, &s);
 
-    while (fgets(line, sizeof(line), f)) {
-        if (!parseInfoLine(line, &k, &v)) continue;
-        if (strcmp(k, "firmware_count") == 0) {
-            expected_count = atoi(v);
-            continue;
-        }
-        if (strncmp(k, "firmware", 8) != 0) continue;
-
-        k += 8;
-        if (*k < '0' || *k > '9') continue;
-        int idx = 0;
-        while (*k >= '0' && *k <= '9') {
-            idx = idx * 10 + (*k++ - '0');
-        }
-        if (idx >= kMaxCoreFirmware) continue;
-
-        auto& entry = out->entries[idx];
-        if (strcmp(k, "_path") == 0) {
-            safeCopy(entry.path, v, sizeof(entry.path));
-            if (idx >= out->count) out->count = idx + 1;
-        } else if (strcmp(k, "_desc") == 0) {
-            safeCopy(entry.desc, v, sizeof(entry.desc));
-        } else if (strcmp(k, "_opt") == 0) {
-            entry.optional = (v[0] == 't' || v[0] == '1');
-        }
-    }
-    fclose(f);
-
-    if (expected_count >= 0 && expected_count < out->count) {
-        out->count = expected_count;
-    }
+    if (s.expected >= 0 && s.expected < out->count) out->count = s.expected;
     return out->count > 0;
+}
+
+struct MetaScan { char* name; size_t n_sz; char* exts; size_t e_sz; bool found; };
+
+static void metaLine(const char* k, const char* v, void* ud) {
+    MetaScan* s = static_cast<MetaScan*>(ud);
+    if (s->name && s->n_sz && strcmp(k, "display_name") == 0) {
+        safeCopy(s->name, v, s->n_sz);
+        s->found = true;
+    } else if (s->exts && s->e_sz && strcmp(k, "supported_extensions") == 0) {
+        safeCopy(s->exts, v, s->e_sz);
+        s->found = true;
+    }
 }
 
 bool getCoreMetadataFromInfo(const char* core_path, char* name, size_t n_sz, char* exts, size_t e_sz) {
@@ -97,20 +115,9 @@ bool getCoreMetadataFromInfo(const char* core_path, char* name, size_t n_sz, cha
     if (name && n_sz) name[0] = '\0';
     if (exts && e_sz) exts[0] = '\0';
 
-    char line[512], *k, *v;
-    bool found_any = false;
-    while (fgets(line, sizeof(line), f)) {
-        if (!parseInfoLine(line, &k, &v)) continue;
-        if (name && n_sz && strcmp(k, "display_name") == 0) {
-            safeCopy(name, v, n_sz);
-            found_any = true;
-        } else if (exts && e_sz && strcmp(k, "supported_extensions") == 0) {
-            safeCopy(exts, v, e_sz);
-            found_any = true;
-        }
-    }
-    fclose(f);
-    return found_any;
+    MetaScan s{ name, n_sz, exts, e_sz, false };
+    scanInfo(f, metaLine, &s);
+    return s.found;
 }
 
 /* ------------------------------------------------------------------ */
